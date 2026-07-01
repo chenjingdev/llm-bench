@@ -402,6 +402,41 @@ def trend_block(axes_order: list[str], models: list[str], score_of) -> str:
             f'<div class="grid">{cards}</div>')
 
 
+def pearson(xs: list[float], ys: list[float]):
+    """피어슨 상관. 표본<2 또는 분산 0이면 None."""
+    n = len(xs)
+    if n < 2 or len(ys) != n:
+        return None
+    mx, my = sum(xs) / n, sum(ys) / n
+    sxx = sum((x - mx) ** 2 for x in xs)
+    syy = sum((y - my) ** 2 for y in ys)
+    if sxx == 0 or syy == 0:
+        return None
+    sxy = sum((x - mx) * (y - my) for x, y in zip(xs, ys))
+    return sxy / (sxx ** 0.5 * syy ** 0.5)
+
+
+def correlation_card(scored: dict) -> str:
+    """말투 가설: 창의 vs 청중 점수 상관(관측만, 인과 주장 금지)."""
+    scores = scored["scores"]
+    models = scored["manifest"]["models"]
+    if "creativity" not in scores or "audience" not in scores:
+        return ""
+    pairs = [(config.alias(m), scores["creativity"][m].score, scores["audience"][m].score)
+             for m in models
+             if scores["creativity"].get(m) and scores["audience"].get(m)]
+    if len(pairs) < 2:
+        return ""
+    r = pearson([p[1] for p in pairs], [p[2] for p in pairs])
+    rtxt = "n/a" if r is None else f"{r:+.2f}"
+    rows = "".join(f"<tr><td>{a}</td><td>{cx:.1f}</td><td>{cy:.1f}</td></tr>"
+                   for a, cx, cy in pairs)
+    return (f'<div class="verdict"><b>말투 가설 관측</b> — 창의 vs 청중 상관 r={rtxt} '
+            f'(표본 {len(pairs)}, 관측일 뿐 인과 아님)'
+            f'<table style="margin-top:8px"><tr><th>모델</th><th>창의</th><th>청중</th></tr>'
+            f'{rows}</table></div>')
+
+
 def html_report(scored: dict, findings_html: str = "") -> str:
     manifest = scored["manifest"]
     scores = scored["scores"]
@@ -522,6 +557,7 @@ def html_report(scored: dict, findings_html: str = "") -> str:
  repeats {manifest['repeats']} · cost ${manifest['total_cost_usd']} ·
  errors {manifest['n_errors']} · 가설: 세대↑ = 코딩/실행↑, 대화/창의/스타일↓ ("벤치 최적화 → 자폐화")</div>
 <div class="verdict">{verdict}</div>
+{correlation_card(scored)}
 <div class="legend">{legend}</div>
 {charts_section}
 <div style="margin-top:22px;overflow-x:auto"><table><tr><th>축</th>{head}</tr>{''.join(rows)}</table></div>
