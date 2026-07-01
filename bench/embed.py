@@ -96,7 +96,7 @@ def lof(vecs: list[list[float]], k: int = 20) -> list[float]:
     kdist = [neigh[i][-1][0] for i in range(n)]          # k-거리
 
     def reach_dist(i: int, j: int, d_ij: float) -> float:
-        return max(kdist[j], d_ij)
+        return max(kdist[j], d_ij, 1e-9)
 
     lrd = []                                              # 국소 도달밀도
     for i in range(n):

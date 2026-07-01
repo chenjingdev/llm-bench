@@ -1,3 +1,5 @@
+import math
+
 from bench import embed
 
 
@@ -21,3 +23,11 @@ def test_lof_flags_outlier_highest():
 def test_lof_degenerate_small_pool():
     assert embed.lof([[1, 0]], k=5) == [1.0]     # 1개면 전형값
     assert embed.lof([], k=5) == []
+
+
+def test_lof_duplicates_no_inf_and_low_novelty():
+    # 완전 동일 벡터가 섞여도 inf/nan 없이 유한, 중복점은 아웃라이어보다 낮아야
+    vecs = [[1, 0], [1, 0], [1, 0], [0, 1]]   # 앞 3개 동일(중복 클러스터), 마지막이 진짜 외딴점
+    s = embed.lof(vecs, k=2)
+    assert all(math.isfinite(x) for x in s)
+    assert s[0] <= s[3]          # 중복점 < 진짜 아웃라이어
