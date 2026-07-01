@@ -1,4 +1,7 @@
+import math
+
 from bench.axes import creativity as cr
+from bench.axes import _textmetrics as tm
 
 
 def _sample(model, pid, sub, text):
@@ -46,6 +49,96 @@ def test_score_pool_ranks_original_above_cliche(monkeypatch):
     res = cr.score_pool({"A": cliche, "B": orig})
     assert set(res) == {"A", "B"}
     assert res["B"].score >= res["A"].score
+
+
+# --- LOF 국소성(adaptive k)이 실제로 순위를 좌우하는지 ---
+# 기하: 공유 "온토픽" 축(D, 압도적, 모든 아이템 동일) + 별도 3차원 소축(위치,
+# 노름 M으로 고정) → prompt-코사인은 모든 아이템에서 상수(ontopic이 승부에
+# 개입 못 하게 분리). A의 12개 항목은 소축의 한 방향(e_a) 근방에 약한 지터로
+# 모여 있는 조밀한 컨센서스 클러스터(서로 거의 동일한 벡터). B의 1개 항목은
+# 완전히 직교인 방향(e_b)에 홀로 위치한 진짜 국소 이상치.
+# 실측(k=20, 수정 전): 풀 크기 n=13 → k가 n-1=12로 클램프되어 사실상
+# "전역" 이웃이 되고 밀도차가 뭉개짐 — A=91.59 > B=7.33 (역전, discrimination 상실).
+# 실측(adaptive k=4, 수정 후): A=84.27 < B=91.59 — LOF가 B를 올바르게 1위로.
+_D = 1000.0
+_M = 10.0
+_PROMPT = "brainstorm ideas about onboarding"
+_E_A = (0.0, 1.0, 0.0)
+_E_B = (0.0, 0.0, 1.0)
+_A_ITEMS = [
+    "streamline signup with social login options",
+    "add a progress bar during onboarding steps",
+    "send a friendly welcome email after signup",
+    "offer a guided product tour on first visit",
+    "provide sample data to explore features quickly",
+    "highlight quick wins in the first session",
+    "let users skip optional profile fields",
+    "show contextual tooltips on hover",
+    "enable a dark mode toggle in settings",
+    "add a keyboard shortcuts cheat sheet",
+    "provide inline validation on form fields",
+    "offer a checklist for onboarding tasks",
+]
+_B_ITEM = ("a bioluminescent onboarding guide that rewrites its narrative "
+           "tone from real-time mood telemetry")
+
+
+def _normalize3(v, mag):
+    n = math.sqrt(sum(x * x for x in v))
+    return [x / n * mag for x in v]
+
+
+def _jitter3(base, spread, i):
+    # 결정론적(비-random) 소섭동: 클러스터 내 아이템을 서로 살짝 다르게(중복
+    # 벡터로 인한 LOF 0/inf 방지) 하되 e_base 근방에 조밀하게 유지.
+    off = [base[0] + spread * math.sin(i * 0.7 + 0.1),
+           base[1] + spread * math.cos(i * 0.9 + 0.3),
+           base[2] + spread * math.sin(i * 1.3 + 0.5)]
+    return _normalize3(off, _M)
+
+
+def _lof_probe_vecmap():
+    vecmap = {_PROMPT: [_D, 0.0, 0.0, 0.0]}
+    for i, text in enumerate(_A_ITEMS):
+        vecmap[text] = [_D] + _jitter3(_E_A, 0.10, i)
+    vecmap[_B_ITEM] = [_D] + _normalize3(list(_E_B), _M)
+    return vecmap
+
+
+def _lof_probe_samples():
+    a_text = "\n".join(f"{i + 1}. {t}" for i, t in enumerate(_A_ITEMS))
+    b_text = f"1. {_B_ITEM}"
+    pid, sub = "creativity-lof-0", "onboarding"
+    return {
+        "A": [_sample("A", pid, sub, a_text)],
+        "B": [_sample("B", pid, sub, b_text)],
+    }, a_text, b_text
+
+
+def test_score_pool_lof_discriminates(monkeypatch):
+    vecmap = _lof_probe_vecmap()
+    monkeypatch.setattr(cr.embed, "embed", lambda texts, prefix=True: [vecmap[t] for t in texts])
+    monkeypatch.setattr(cr.embed, "available", lambda: True)
+    samples, a_text, b_text = _lof_probe_samples()
+
+    # 검증 게이트가 아니라 LOF가 승부를 가름을 보장: 둘 다 비중복(validity≈1).
+    assert tm.validity_gate(a_text, _A_ITEMS) > 0.99
+    assert tm.validity_gate(b_text, [_B_ITEM]) > 0.99
+
+    res = cr.score_pool(samples)
+    assert res["B"].score > res["A"].score
+
+
+def test_lof_component_is_load_bearing(monkeypatch):
+    vecmap = _lof_probe_vecmap()
+    monkeypatch.setattr(cr.embed, "embed", lambda texts, prefix=True: [vecmap[t] for t in texts])
+    monkeypatch.setattr(cr.embed, "available", lambda: True)
+    # LOF를 무력화(전원 동률) → novelty가 더 이상 판별력을 갖지 않아야 함.
+    monkeypatch.setattr(cr.embed, "lof", lambda vecs, k=2: [1.0] * len(vecs))
+    samples, _a_text, _b_text = _lof_probe_samples()
+
+    res = cr.score_pool(samples)
+    assert res["B"].score <= res["A"].score + 1e-6
 
 
 def test_score_pool_embed_unavailable(monkeypatch):

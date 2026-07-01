@@ -24,6 +24,11 @@ _LINE_ITEM = re.compile(r"^\s*(?:\d+[.):\]]|[-*•·])\s*(.+)$")
 CEILING_NOTE = "임베딩 독창성 인간상관 ~0.2–0.3; 거친 순위로만 해석."
 
 
+def _adaptive_k(n: int) -> int:
+    """국소 LOF용 이웃 수: 풀 크기에 비례하되 국소성 유지(k << n). ≥2."""
+    return max(2, min(15, n // 3))
+
+
 def parse_items(text: str) -> list[str]:
     items = []
     for line in (text or "").splitlines():
@@ -96,7 +101,7 @@ def _score_from_recs(recs: list[dict]) -> dict[str, dict]:
         texts = [r["item"] for r in pool]
         vecs = embed.embed(texts)
         prompt_vec = embed.embed([pool[0]["prompt"]])[0] if pool[0]["prompt"] else None
-        lofs = embed.lof(vecs, k=20)
+        lofs = embed.lof(vecs, k=_adaptive_k(len(vecs)))
         cos_all = ([embed.cosine(v, prompt_vec) for v in vecs]
                    if prompt_vec is not None else [1.0] * len(vecs))
         for r, lf, cos_i in zip(pool, lofs, cos_all):
