@@ -1,31 +1,27 @@
-"""축 4 — 창의·발산 (judge-free + oracle-free, 로컬 임베딩).
+"""축 4 — 창의·발산 (독창성 중심, judge-free, 순수 기계 채점).
 
-연구 결론대로 **다양성 × 품질을 함께** 잰다(다양성 단독은 횡설수설이 만점).
-세 probe 유형:
-  · DAT  (Divergent Association): 무관한 단어 10개 → 평균 쌍별 의미거리(발산). r≈0.5(인간).
-  · AUT  (Alternative Uses): 한 사물의 창의적 용도 → 의미 발산 × 유창성(중복 제거).
-  · open (발산 오프닝): 서로 다른 6개 첫문장 → 상호 의미거리.
-보조(어휘): MTLD(어휘다양성). 임베딩은 ollama nomic-embed-text(로컬, 무과금).
+독창 = LOF 국소밀도 희소성(풀 임베딩, MAX 1개) × 온토픽 게이트(probe별 상대)
+       × 검증 게이트(gzip·긴n-gram·self-bleu·MTLD, _textmetrics).
+풀 없으면 CDAT 폴백(내부 발산 × 온토픽). 정규화는 풀 상대 백분위.
 
-정규화: nomic-embed의 common-word 발산 관측범위[LO,HI]로 0–100 매핑(측정기 baseline).
+⚠️ 정직 경고: 임베딩 독창성은 인간 상관 ~0.2–0.3, 임베딩 키워도 안 오름
+(Organisciak 2023). 점수는 정밀 등급이 아니라 거친 순위로 해석.
 """
 
 from __future__ import annotations
 
+import math
 import re
-from statistics import mean
+from collections import defaultdict
+from statistics import mean, pstdev
 
 from .. import embed
+from . import _textmetrics as tm
 from .base import AxisResult, Sample
-
-# nomic-embed-text의 실측 발산 범위(근사어 바닥 ~ 무관어 천장). 측정기 보정상수.
-LO, HI = 0.15, 0.42
 
 _LINE_ITEM = re.compile(r"^\s*(?:\d+[.):\]]|[-*•·])\s*(.+)$")
 
-
-def _norm(mpd: float) -> float:
-    return max(0.0, min(1.0, (mpd - LO) / (HI - LO)))
+CEILING_NOTE = "임베딩 독창성 인간상관 ~0.2–0.3; 거친 순위로만 해석."
 
 
 def parse_items(text: str) -> list[str]:
@@ -36,109 +32,137 @@ def parse_items(text: str) -> list[str]:
             it = re.sub(r"\*+", "", m.group(1)).strip().rstrip(".")
             if it:
                 items.append(it)
-    if not items:  # fallback: 콤마/줄 구분(DAT가 한 줄로 올 때)
+    if not items:
         items = [p.strip(" .*") for p in re.split(r"[,;\n]", text or "") if p.strip(" .*")]
     return items
 
 
-def _dat_words(items: list[str]) -> list[str]:
-    words = []
-    for it in items:
-        toks = re.findall(r"[A-Za-z]+", it)
-        if toks and len(toks[0]) > 1:
-            words.append(toks[0].lower())
-    # 중복 제거(순서 유지)
-    seen, uniq = set(), []
-    for w in words:
-        if w not in seen:
-            seen.add(w); uniq.append(w)
-    return uniq[:10]
+def percentile_rank(value: float, population: list[float]) -> float:
+    """population 대비 value의 백분위(0..1). 자의적 상수 없는 상대 정규화."""
+    if not population:
+        return 0.5
+    below = sum(1 for p in population if p < value)
+    equal = sum(1 for p in population if p == value)
+    return (below + 0.5 * equal) / len(population)
 
 
-def _dedup_by_embedding(items: list[str], vecs: list[list[float]], thr: float = 0.92):
-    keep_items, keep_vecs = [], []
-    for it, v in zip(items, vecs):
-        if all(embed.cosine(v, kv) < thr for kv in keep_vecs):
-            keep_items.append(it); keep_vecs.append(v)
-    return keep_items, keep_vecs
+def ontopic_gate(cos_i: float, cos_all: list[float]) -> float:
+    """probe 내 프롬프트-코사인 분포 기준, 저-꼬리(딴소리)만 감점(0..1).
+
+    딥리서치: 절대 커트라인 금지(Rossi 2024) → probe 내 z-score 시그모이드.
+    전형 항목(평균 이상)은 ~1 통과, 저-꼬리 아웃라이어만 게이트.
+    """
+    if len(cos_all) < 2:
+        return 1.0
+    mu = mean(cos_all)
+    sd = pstdev(cos_all) or 1e-6
+    z = (cos_i - mu) / sd
+    return 1.0 / (1.0 + math.exp(-(z + 1.5) * 2.0))
 
 
-def mtld(text: str, threshold: float = 0.72) -> float:
-    words = [w.lower() for w in re.findall(r"[A-Za-z']+", text or "")]
-    if len(words) < 50:   # MTLD는 짧은 글에서 불안정 → 측정 안 함
-        return 0.0
-
-    def factors(seq):
-        f, types, cnt = 0, set(), 0
-        for w in seq:
-            types.add(w); cnt += 1
-            if len(types) / cnt <= threshold:
-                f += 1; types, cnt = set(), 0
-        if cnt > 0:
-            f += (1 - len(types) / cnt) / (1 - threshold)
-        return max(f, 1.0)   # 부분팩터 바닥 1.0 → 오버플로 방지
-
-    v = (len(words) / factors(words) + len(words) / factors(list(reversed(words)))) / 2
-    return min(v, 200.0)
+def _prompt_of(s: Sample) -> str:
+    return (s.get("meta") or {}).get("prompt") or s.get("prompt") or ""
 
 
-def grade_one(sample: Sample) -> dict:
-    sub = (sample.get("meta") or {}).get("subtype", "open")
-    text = sample.get("text", "") or ""
-    items = parse_items(text)
-    row = {"probe_id": sample.get("probe_id"), "sub": sub, "mtld": round(mtld(text), 1)}
+def _sub_of(s: Sample) -> str:
+    return (s.get("meta") or {}).get("subtype", "open")
 
-    if sub == "dat":
-        words = _dat_words(items)
-        vecs = embed.embed(words) if len(words) >= 2 else []
-        mpd = embed.mean_pairwise_distance(vecs) if vecs else 0.0
-        validity = len(words) / 10.0
-        sc = _norm(mpd) * min(1.0, validity)
-        row.update(n_items=len(words), mpd=round(mpd, 3), validity=round(validity, 2))
 
-    elif sub == "aut":
-        vecs0 = embed.embed(items) if len(items) >= 2 else []
-        kept, kv = _dedup_by_embedding(items, vecs0) if vecs0 else ([], [])
-        mpd = embed.mean_pairwise_distance(kv) if len(kv) >= 2 else 0.0
-        fluency = min(1.0, len(kept) / 12.0)         # 12개 이상 유효 아이디어면 만점
-        sc = _norm(mpd) * (0.6 + 0.4 * fluency)       # 발산 위주 + 유창성 보정
-        row.update(n_raw=len(items), n_unique=len(kept), mpd=round(mpd, 3),
-                   fluency=round(fluency, 2))
+def _item_records(samples: list[Sample]) -> list[dict]:
+    """샘플 → 아이템 단위 레코드(모델/서브/프롬프트/원문). metaphor는 응답 전체=1항목."""
+    recs = []
+    for s in samples:
+        if not s.get("ok", True):
+            continue
+        sub = _sub_of(s)
+        text = s.get("text", "") or ""
+        items = parse_items(text) if sub != "metaphor" else [text.strip()]
+        for it in items:
+            if it:
+                recs.append({"model": s["model"], "sub": sub,
+                             "probe_id": s.get("probe_id"), "prompt": _prompt_of(s),
+                             "item": it, "resp_text": text, "resp_items": items})
+    return recs
 
-    else:  # open
-        vecs = embed.embed(items) if len(items) >= 2 else []
-        mpd = embed.mean_pairwise_distance(vecs) if vecs else 0.0
-        sc = _norm(mpd)
-        row.update(n_items=len(items), mpd=round(mpd, 3))
 
-    row["score"] = round(sc * 100, 1)
-    return row
+def _score_from_recs(recs: list[dict]) -> dict[str, dict]:
+    """(probe,sub) 풀별 LOF 희소성 × 온토픽 × 검증 → 모델별 서브점수 누적."""
+    by_pool = defaultdict(list)
+    for r in recs:
+        by_pool[(r["probe_id"], r["sub"])].append(r)
+
+    acc: dict[str, dict] = defaultdict(lambda: {"subs": defaultdict(list), "detail": []})
+    for (pid, sub), pool in by_pool.items():
+        texts = [r["item"] for r in pool]
+        vecs = embed.embed(texts)
+        prompt_vec = embed.embed([pool[0]["prompt"]])[0] if pool[0]["prompt"] else None
+        lofs = embed.lof(vecs, k=20)
+        cos_all = ([embed.cosine(v, prompt_vec) for v in vecs]
+                   if prompt_vec is not None else [1.0] * len(vecs))
+        for r, lf, cos_i in zip(pool, lofs, cos_all):
+            novelty = percentile_rank(lf, lofs)
+            ot = ontopic_gate(cos_i, cos_all)
+            val = tm.validity_gate(r["resp_text"], r["resp_items"])
+            item_score = novelty * ot * val
+            acc[r["model"]]["subs"][sub].append(item_score)
+            acc[r["model"]]["detail"].append(
+                {"probe_id": pid, "sub": sub, "item": r["item"][:80],
+                 "lof": round(lf, 3), "novelty": round(novelty, 3),
+                 "ontopic": round(ot, 3), "validity": round(val, 3),
+                 "item_score": round(item_score, 3)})
+    return acc
+
+
+def score_pool(per_model: dict[str, list[Sample]]) -> dict[str, AxisResult]:
+    """풀-인지 채점: 한 probe의 전 모델 아이디어를 한 공간에서 LOF 희소성."""
+    models = list(per_model)
+    if not embed.available():
+        return {m: AxisResult(axis="creativity", score=0.0, n=0,
+                              note="ollama 임베딩 서버 불가 — 채점 생략") for m in models}
+    all_recs = []
+    for m in models:
+        all_recs += _item_records(per_model[m])
+    acc = _score_from_recs(all_recs)
+
+    results = {}
+    for m in models:
+        a = acc.get(m)
+        if not a or not a["subs"]:
+            results[m] = AxisResult(axis="creativity", score=0.0, n=0, note="no samples")
+            continue
+        sub_max = {sub: max(scores) for sub, scores in a["subs"].items() if scores}
+        model_score = mean(sub_max.values()) if sub_max else 0.0
+        n_items = sum(len(s) for s in a["subs"].values())
+        results[m] = AxisResult(
+            axis="creativity", score=round(model_score * 100, 2), n=n_items,
+            subscores={f"max_{sub}": round(v * 100, 1) for sub, v in sub_max.items()},
+            detail=a["detail"], note="독창=LOF희소성(MAX)×온토픽×검증. " + CEILING_NOTE)
+    return results
 
 
 def score(samples: list[Sample]) -> AxisResult:
+    """단일모델 CDAT 폴백: 내부 발산 × 온토픽 × 검증(풀/상대비교 아님)."""
     if not embed.available():
         return AxisResult(axis="creativity", score=0.0, n=0,
                           note="ollama 임베딩 서버 불가 — 채점 생략")
-    rows = [grade_one(s) for s in samples]
-    if not rows:
+    recs = _item_records(samples)
+    if not recs:
         return AxisResult(axis="creativity", score=0.0, n=0, note="no samples")
-
-    def by_sub(sub, key):
-        vals = [r[key] for r in rows if r["sub"] == sub and key in r]
-        return round(mean(vals), 3) if vals else None
-
-    subs = {
-        "dat_mpd": by_sub("dat", "mpd"),
-        "aut_mpd": by_sub("aut", "mpd"),
-        "open_mpd": by_sub("open", "mpd"),
-        "avg_mtld": round(mean(r["mtld"] for r in rows), 1),
-        "aut_unique": by_sub("aut", "n_unique"),
-    }
+    by_pool = defaultdict(list)
+    for r in recs:
+        by_pool[(r["probe_id"], r["sub"])].append(r)
+    sub_scores: dict[str, list[float]] = defaultdict(list)
+    for (pid, sub), pool in by_pool.items():
+        texts = [r["item"] for r in pool]
+        vecs = embed.embed(texts)
+        internal = embed.mean_pairwise_distance(vecs)
+        prompt_vec = embed.embed([pool[0]["prompt"]])[0] if pool[0]["prompt"] else None
+        cos_all = ([embed.cosine(v, prompt_vec) for v in vecs]
+                   if prompt_vec is not None else [1.0] * len(vecs))
+        ot = mean(ontopic_gate(c, cos_all) for c in cos_all) if cos_all else 1.0
+        val = mean(tm.validity_gate(r["resp_text"], r["resp_items"]) for r in pool)
+        sub_scores[sub].append(internal * ot * val)
+    model_score = mean(mean(v) for v in sub_scores.values()) if sub_scores else 0.0
     return AxisResult(
-        axis="creativity",
-        score=round(mean(r["score"] for r in rows), 2),
-        n=len(rows),
-        subscores={k: v for k, v in subs.items() if v is not None},
-        detail=rows,
-        note="발산(평균 쌍별 의미거리, 로컬 임베딩) × 품질(유효/유창). nomic 범위[0.15,0.42]→0–100.",
-    )
+        axis="creativity", score=round(min(model_score, 1.0) * 100, 2),
+        n=len(recs), note="CDAT 폴백(내부발산×온토픽×검증, 상대비교 아님). " + CEILING_NOTE)
