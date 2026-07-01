@@ -71,3 +71,43 @@ def mean_pairwise_distance(vecs: list[list[float]]) -> float:
             tot += 1.0 - cosine(vecs[i], vecs[j])
             cnt += 1
     return tot / cnt if cnt else 0.0
+
+
+def knn_cosine_distances(vecs: list[list[float]], i: int, k: int) -> list[tuple[float, int]]:
+    """vec i에서 코사인거리(1-cos) 가까운 순 (거리, 인덱스) k개(자기 제외)."""
+    dists = [(1.0 - cosine(vecs[i], vecs[j]), j) for j in range(len(vecs)) if j != i]
+    dists.sort(key=lambda t: t[0])
+    return dists[:max(1, k)]
+
+
+def lof(vecs: list[list[float]], k: int = 20) -> list[float]:
+    """Local Outlier Factor(코사인거리 기반, 순수 파이썬).
+
+    ~1 = 전형(이웃과 밀도 비슷), >1 = 국소적으로 외딴(독창).
+    딥리서치 근거: 밀도비율이라 클러스터별 밀도차에 강건(sklearn 문서).
+    """
+    n = len(vecs)
+    if n == 0:
+        return []
+    if n < 2:
+        return [1.0] * n
+    k = min(k, n - 1)
+    neigh = [knn_cosine_distances(vecs, i, k) for i in range(n)]
+    kdist = [neigh[i][-1][0] for i in range(n)]          # k-거리
+
+    def reach_dist(i: int, j: int, d_ij: float) -> float:
+        return max(kdist[j], d_ij)
+
+    lrd = []                                              # 국소 도달밀도
+    for i in range(n):
+        s = sum(reach_dist(i, j, d) for d, j in neigh[i])
+        lrd.append(len(neigh[i]) / s if s > 0 else float("inf"))
+
+    scores = []
+    for i in range(n):
+        if lrd[i] == 0 or lrd[i] == float("inf"):
+            scores.append(1.0)
+            continue
+        ratio = sum(lrd[j] for _, j in neigh[i]) / len(neigh[i]) / lrd[i]
+        scores.append(ratio)
+    return scores
