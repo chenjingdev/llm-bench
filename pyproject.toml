@@ -1,0 +1,13 @@
+[project]
+name = "llm-bench"
+version = "0.1.0"
+description = "개인용 N-of-1 모델 비교 벤치마크 (8축 레이더)"
+requires-python = ">=3.9"
+# 의존성 없음 — stdlib만으로 동작(모델 호출은 구독 기반 `claude -p` 서브프로세스).
+dependencies = []
+
+[project.scripts]
+bench = "bench.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["bench*"]
