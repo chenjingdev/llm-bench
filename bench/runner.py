@@ -26,8 +26,10 @@ def _stamp() -> str:
 
 
 def _singleturn_unit(model: str, probe: probes.Probe, repeat: int, effort: str) -> dict:
-    """단일턴 축(density, instruction). meta를 레코드에 실어 채점기로 전달."""
+    """단일턴 축(density, instruction, creativity). meta에 prompt도 실어 채점기로 전달."""
     r = client.call(model, probe.prompt, effort=effort)
+    meta = dict(probe.meta or {})
+    meta.setdefault("prompt", probe.prompt)
     return {
         "axis": probe.axis,
         "probe_id": probe.id,
@@ -35,7 +37,7 @@ def _singleturn_unit(model: str, probe: probes.Probe, repeat: int, effort: str) 
         "repeat": repeat,
         "prompt": probe.prompt,
         "text": r.text,
-        "meta": probe.meta,
+        "meta": meta,
         "ok": r.ok,
         "error": r.error,
         "cost_usd": r.cost_usd,

@@ -223,35 +223,83 @@ def audience_probes(seed: Optional[int] = None, n: int = 4, **_) -> list[Probe]:
 
 
 # ======================================================================
-# 축 4 — 창의·발산 (DAT / AUT / 발산 오프닝)
+# 축 4 — 창의·발산 (독창성 중심: tech/copy/humor/metaphor)
+# 오염방어: 주제/엔티티 seed 난수화. 포맷 지시로 파싱 안정화.
 # ======================================================================
-_AUT_OBJECTS = ["brick", "paperclip", "sock", "spoon", "newspaper",
-                "rubber band", "bucket", "candle", "shoelace", "coffee mug"]
+_TECH_DOMAINS = [
+    ("retrieval-augmented generation (RAG)", "chunk→embed→vector search→rerank"),
+    ("long-term memory for coding agents", "store embeddings in a vector DB"),
+    ("making an LLM signal when it doesn't know", "add confidence scores"),
+    ("evaluating if one LLM fits a person's workflow", "standard benchmarks / A-B votes"),
+    ("caching LLM responses to cut cost", "exact-match key on the prompt string"),
+    ("reducing hallucination at inference time", "just retrieve more context"),
+]
+_COPY_CONCEPTS = [
+    "a CLI that benchmarks LLMs on your own tasks",
+    "a note app that links ideas automatically",
+    "a terminal file manager with fuzzy search",
+    "a habit tracker that punishes you playfully",
+    "a local-first password manager",
+    "a code review bot that argues back",
+]
+_HUMOR_SITUATIONS = [
+    "your CI passes locally but fails only in production",
+    "a standup meeting that could have been an email",
+    "an AI startup pivoting for the third time this year",
+    "a 'quick 5-minute fix' that took all weekend",
+    "waiting for a huge model to finish downloading",
+    "a manager who discovered the word 'synergy'",
+]
+_META_CONCEPTS = [
+    ("how a vector embedding represents meaning", "embedding"),
+    ("why distributed consensus is hard", "consensus"),
+    ("what backpropagation does", "backpropagation"),
+    ("how a bloom filter trades accuracy for space", "bloom filter"),
+    ("why garbage collection can pause a program", "garbage collection"),
+    ("how public-key cryptography keeps secrets", "public-key cryptography"),
+]
 
 
-def creativity_probes(seed: Optional[int] = None, n_dat: int = 5,
-                      n_aut: int = 4, **_) -> list[Probe]:
-    """정통 분해(Torrance/Guilford)용 배터리: DAT 반복 + AUT 다(多)사물.
-
-    DAT는 반복 평균(발산적 사고), AUT는 유창성·유연성·독창성 분해를 위해 여러 사물.
-    """
+def creativity_probes(seed=None, **_) -> list[Probe]:
+    """4 서브 × 1 probe. 주제 seed 난수화. meta에 subtype+prompt."""
     rng = random.Random(seed)
-    probes = []
-    for i in range(n_dat):
-        probes.append(Probe(
-            id=f"creativity-dat-{i}", axis="creativity",
-            prompt=("Name 10 nouns that are as different and unrelated to each other "
-                    "as possible. Use single, common English words (no proper nouns, "
-                    "no phrases). Output a numbered list 1–10, one word per line, nothing else."),
-            meta={"subtype": "dat", "trial": i}))
-    for i, o in enumerate(rng.sample(_AUT_OBJECTS, n_aut)):
-        probes.append(Probe(
-            id=f"creativity-aut-{i}", axis="creativity",
-            prompt=(f"List 15 unusual and genuinely creative uses for a {o}. "
-                    f"Avoid the obvious everyday use. Make the ideas as different "
-                    f"from each other as possible. One idea per line, numbered 1–15."),
-            meta={"subtype": "aut", "object": o}))
-    return probes
+    out = []
+
+    dom, std = rng.choice(_TECH_DOMAINS)
+    prompt_tech = (f"I'm exploring {dom}. Beyond the standard approach ({std}), "
+                   f"brainstorm 12 genuinely novel, non-obvious ideas — not the textbook ones. "
+                   f"Number them 1–12, one idea per line.")
+    out.append(Probe(
+        id="creativity-tech-0", axis="creativity",
+        prompt=prompt_tech,
+        meta={"subtype": "tech", "prompt": prompt_tech}))
+
+    concept = rng.choice(_COPY_CONCEPTS)
+    prompt_copy = (f"Product: {concept}. Give 10 distinctive product names or taglines. "
+                   f"Avoid generic tech clichés (smart/pro/hub/AI-prefix). "
+                   f"Number them 1–10, one per line.")
+    out.append(Probe(
+        id="creativity-copy-0", axis="creativity",
+        prompt=prompt_copy,
+        meta={"subtype": "copy", "prompt": prompt_copy}))
+
+    sit = rng.choice(_HUMOR_SITUATIONS)
+    prompt_humor = (f"Write 10 genuinely witty, non-obvious one-liners or satirical takes about: "
+                    f"{sit}. Avoid tired, predictable jokes. Number them 1–10, one per line.")
+    out.append(Probe(
+        id="creativity-humor-0", axis="creativity",
+        prompt=prompt_humor,
+        meta={"subtype": "humor", "prompt": prompt_humor}))
+
+    cdesc, cword = rng.choice(_META_CONCEPTS)
+    prompt_meta = (f"Explain {cdesc} using a fresh, non-obvious analogy — avoid the cliché "
+                   f"comparisons everyone uses. The analogy must stay accurate to how "
+                   f"{cword} actually works. Write 2–4 sentences.")
+    out.append(Probe(
+        id="creativity-metaphor-0", axis="creativity",
+        prompt=prompt_meta,
+        meta={"subtype": "metaphor", "concept": cword, "prompt": prompt_meta}))
+    return out
 
 
 # ======================================================================
