@@ -44,13 +44,14 @@ def score_run(run_dir: Path) -> dict:
     data = load_run(run_dir)
     manifest = data["manifest"]
     models = manifest["models"]
-    # scores[axis][model] = AxisResult
     scores: dict[str, dict] = {}
     for axis, per_model in data["by_axis"].items():
-        scores[axis] = {}
-        for model in models:
-            res = axis_mod.score(axis, per_model.get(model, []))
-            scores[axis][model] = res
+        if axis in axis_mod.POOLED:
+            # 풀-인지: 전 모델 샘플을 함께 채점
+            pooled = axis_mod.score_pool(axis, {m: per_model.get(m, []) for m in models})
+            scores[axis] = {m: pooled.get(m) for m in models}
+        else:
+            scores[axis] = {m: axis_mod.score(axis, per_model.get(m, [])) for m in models}
     return {"manifest": manifest, "scores": scores}
 
 

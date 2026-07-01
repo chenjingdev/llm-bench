@@ -21,6 +21,14 @@ SCORERS: dict[str, Callable[[list[Sample]], AxisResult]] = {
     "creativity": creativity.score,
 }
 
+# 풀-인지 축: 한 probe의 전 모델 샘플을 함께 받아 채점(LOF 희소성 등).
+POOLED: set[str] = {"creativity"}
+
+# axis 이름 → 풀 채점 함수(per_model dict → model별 AxisResult)
+POOL_SCORERS = {
+    "creativity": creativity.score_pool,
+}
+
 # 레이더 표시 순서(하드↔스타일 교대 배치로 비대칭이 잘 보이게)
 RADAR_ORDER = ["tooluse", "instruction", "creativity", "density", "audience", "sycophancy"]
 
@@ -37,3 +45,7 @@ AXIS_META = {
 
 def score(axis: str, samples: list[Sample]) -> AxisResult:
     return SCORERS[axis](samples)
+
+
+def score_pool(axis: str, per_model: dict) -> dict:
+    return POOL_SCORERS[axis](per_model)
