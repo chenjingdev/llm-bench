@@ -13,9 +13,56 @@ from collections import Counter
 
 _WORD = re.compile(r"[A-Za-z가-힣']+")
 
+# 흔한 영어 불용어(~40개, 하드코딩). 어휘 접지(lexical grounding) 계산 시
+# 관사/전치사/접속사 등 의미 없는 공유어를 "겹침"으로 오인하지 않도록 제외.
+_STOPWORDS = {
+    "the", "and", "for", "are", "but", "not", "you", "all", "can", "her",
+    "was", "one", "our", "out", "day", "get", "has", "him", "his", "how",
+    "man", "new", "now", "old", "see", "two", "way", "who", "boy", "did",
+    "its", "let", "put", "say", "she", "too", "use", "with", "that", "this",
+    "from", "your", "have", "more", "will", "about", "into", "than", "then",
+    "them", "these", "some", "such", "only", "over", "very", "just", "also",
+    "each", "when", "what", "where", "which", "while", "their", "there",
+}
+
 
 def _tokens(text: str) -> list[str]:
     return [w.lower() for w in _WORD.findall(text or "")]
+
+
+def content_words(text: str) -> set[str]:
+    """소문자 알파벳 토큰(길이≥3) 중 불용어를 뺀 '내용어' 집합."""
+    return {w for w in _tokens(text)
+            if len(w) >= 3 and w.isalpha() and w not in _STOPWORDS}
+
+
+def lexical_grounding(item_text: str, ref_vocab: set[str]) -> float:
+    """항목의 내용어 중 ref_vocab에 있는 비율(0..1).
+
+    내용어가 2개 미만인 짧은 항목(예: 카피/네이밍의 발명 단어 1개)은 접지
+    검사에서 면제(1.0) — 정당한 신조어를 오탐으로 0점 처리하지 않기 위함.
+    """
+    cw = content_words(item_text)
+    if len(cw) < 2:
+        return 1.0
+    if not ref_vocab:
+        return 0.0
+    hit = sum(1 for w in cw if w in ref_vocab)
+    return hit / len(cw)
+
+
+def has_function_word(text: str) -> bool:
+    """항목에 문법적 '풀칠'(불용어·길이<3 토큰) 토큰이 ≥1개 있는가.
+
+    진짜 문장/구는 거의 항상 관사·전치사 등 기능어를 하나쯤 포함한다.
+    반면 '명사만 나열한' 헛소리 샐러드(예: purple monday elephant sqrt
+    tractor)는 기능어가 전무 — 접지(lexical_grounding) 게이트를 순수
+    전-내용어 항목에만 적용해, 우연히 풀 전체와 어휘가 안 겹치는 정당한
+    창의 문장(예: "treat citations as a debt the answer must repay")까지
+    오탐으로 누르지 않기 위한 보조 신호.
+    """
+    toks = _tokens(text)
+    return any(not (len(w) >= 3 and w.isalpha() and w not in _STOPWORDS) for w in toks)
 
 
 def compression_ratio(text: str) -> float:

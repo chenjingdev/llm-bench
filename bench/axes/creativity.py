@@ -104,18 +104,44 @@ def _score_from_recs(recs: list[dict]) -> dict[str, dict]:
         lofs = embed.lof(vecs, k=_adaptive_k(len(vecs)))
         cos_all = ([embed.cosine(v, prompt_vec) for v in vecs]
                    if prompt_vec is not None else [1.0] * len(vecs))
+        ref_vocab = _pool_ref_vocab(pool)
         for r, lf, cos_i in zip(pool, lofs, cos_all):
             novelty = percentile_rank(lf, lofs)
             ot = ontopic_gate(cos_i, cos_all)
             val = tm.validity_gate(r["resp_text"], r["resp_items"])
-            item_score = novelty * ot * val
+            grounding = tm.lexical_grounding(r["item"], ref_vocab)
+            # 순수 전-내용어(기능어 0개) 항목에만 접지 게이트 적용. 진짜 문장은
+            # 관사/전치사 하나쯤 있어 면제 — 우연히 풀과 어휘가 안 겹치는 정당한
+            # 창의 문장(각기 다른 참신 어휘를 쓰는 게 창의성의 본질)까지
+            # 오탐으로 죽이지 않기 위함. 명사만 나열된 헛소리 샐러드만 걸림.
+            g_ground = (1.0 if tm.has_function_word(r["item"])
+                        else tm._ramp_up(grounding, bad=0.0, ok=0.2))
+            item_score = novelty * ot * val * g_ground
             acc[r["model"]]["subs"][sub].append(item_score)
             acc[r["model"]]["detail"].append(
                 {"probe_id": pid, "sub": sub, "item": r["item"][:80],
                  "lof": round(lf, 3), "novelty": round(novelty, 3),
                  "ontopic": round(ot, 3), "validity": round(val, 3),
+                 "grounding": round(grounding, 3),
                  "item_score": round(item_score, 3)})
     return acc
+
+
+def _pool_ref_vocab(pool: list[dict]) -> set[str]:
+    """풀의 어휘 접지 기준 어휘: (풀 내 ≥2항목에 등장하는 내용어) ∪ (프롬프트 내용어).
+
+    단어 샐러드 방지용 — 다수 항목이 공유하는 도메인 어휘는 '접지된' 것으로
+    보되, 단 한 항목만의 튀는 신조어는 기준에 넣지 않아 진짜 헛소리(전부
+    비공유 토큰)를 잡아낸다. 프롬프트 어휘는 항상 포함(주제 관련어 보호).
+    """
+    counts: dict[str, int] = defaultdict(int)
+    for r in pool:
+        for w in tm.content_words(r["item"]):
+            counts[w] += 1
+    vocab = {w for w, c in counts.items() if c >= 2}
+    prompt = pool[0]["prompt"] if pool else ""
+    vocab |= tm.content_words(prompt)
+    return vocab
 
 
 def score_pool(per_model: dict[str, list[Sample]]) -> dict[str, AxisResult]:

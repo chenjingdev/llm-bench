@@ -26,6 +26,35 @@ def test_percentile_rank_empty_pop():
     assert cr.percentile_rank(5.0, []) == 0.5
 
 
+# --- 어휘 접지(lexical grounding) ---
+def test_content_words_strips_stopwords_and_short_tokens():
+    cw = tm.content_words("The quick fox and a big red dog ran to it")
+    # 불용어(the/and/a/to/it)·길이<3(it) 제외, 내용어만 남아야
+    assert cw == {"quick", "fox", "big", "red", "dog", "ran"}
+    assert "the" not in cw and "and" not in cw and "it" not in cw
+
+
+def test_lexical_grounding_short_item_exempt():
+    # 내용어 2개 미만(신조 단일 단어 등)은 ref_vocab과 무관하게 항상 1.0
+    assert tm.lexical_grounding("Quietude", {"desk", "office"}) == 1.0
+    assert tm.lexical_grounding("", {"desk"}) == 1.0
+
+
+def test_lexical_grounding_overlap_fraction():
+    ref = {"cache", "context", "query"}
+    # 내용어 4개 중 2개(cache, context)가 ref_vocab에 있음 → 0.5
+    assert tm.lexical_grounding("cache the context somehow please", ref) == 0.5
+    # 전부 겹치면 1.0
+    assert tm.lexical_grounding("cache the context query", ref) == 1.0
+    # 하나도 안 겹치면 0.0
+    assert tm.lexical_grounding("banana quantum sock helix", ref) == 0.0
+
+
+def test_has_function_word_distinguishes_salad_from_sentence():
+    assert tm.has_function_word("treat citations as a debt the answer must repay")
+    assert not tm.has_function_word("purple monday elephant sqrt tractor")
+
+
 def test_ontopic_gate_passes_typical_penalizes_low_tail():
     cos_all = [0.7, 0.72, 0.68, 0.71, 0.30]   # 마지막이 딴소리
     assert cr.ontopic_gate(0.71, cos_all) > 0.8
