@@ -20,8 +20,23 @@ from . import _textmetrics as tm
 from .base import AxisResult, Sample
 
 _LINE_ITEM = re.compile(r"^\s*(?:\d+[.):\]]|[-*•·])\s*(.+)$")
-# 형식 계약(fmt=report) 응답의 ## Body 섹션(다음 ## 섹션 전까지)
-_BODY_SEC = re.compile(r"^##\s*Body\b[^\n]*\n(.*?)(?=^##\s|\Z)", re.S | re.M)
+# 형식 계약(fmt=report) 응답의 Body 섹션 추출.
+# 강건성 요건(적대 검증에서 실측 확정된 실패 모드):
+#   · 인라인 본문("## Body — 답변...")도 캡처 — 계약문 자체가 대시-인라인 예시라 모방됨
+#   · 헤더 변형 허용: ###/####, **볼드**(해시 없는 "**Body:**" 포함), 대소문자, 콜론/대시
+#   · 종결은 Brief/Signal 헤더(##Signal 공백없음·볼드 변형 포함) 또는 문서 끝
+_HDR = r"(?:\**#{1,6}\**|\*{2,})"          # 헤더 마커: #계열 또는 볼드
+_BODY_SEC = re.compile(
+    r"^" + _HDR + r"\s*\**body\b[\*_:：\-–—\s]*(.*?)"
+    r"(?=^" + _HDR + r"\s*\**(?:brief|signal)\b|\Z)",
+    re.S | re.M | re.I)
+# Body를 못 찾았을 때의 2차 정규화: 알려진 스켈레톤 섹션(Brief/Signal)과
+# 내용 없는 Body 헤더 줄만 제거(인라인 본문이 실린 헤더 줄은 보존).
+_SKEL_SEC = re.compile(
+    r"^" + _HDR + r"\s*\**(?:brief|signal)\b.*?(?=^" + _HDR + r"\s*\S|\Z)",
+    re.S | re.M | re.I)
+_BODY_HDR_BARE = re.compile(
+    r"^" + _HDR + r"\s*\**body\b[\*_:：\-–—\s]*$", re.M | re.I)
 
 CEILING_NOTE = "임베딩 독창성 인간상관 ~0.2–0.3; 거친 순위로만 해석."
 
@@ -76,27 +91,47 @@ def _sub_of(s: Sample) -> str:
 
 
 def _main_text(text: str) -> str:
-    """형식 계약 응답이면 ## Body 본문만(스켈레톤 보일러플레이트가 임베딩에
-    섞여 모델 간 대비를 누르는 걸 방지), 아니면 전체 텍스트."""
-    m = _BODY_SEC.search(text or "")
-    return m.group(1).strip() if m else (text or "").strip()
+    """형식 계약 응답이면 Body 본문만(스켈레톤 보일러플레이트가 임베딩에
+    섞여 모델 간 대비를 누르는 걸 방지), 아니면 전체 텍스트.
+
+    Body 헤더를 못 찾으면 2차 정규화(Brief/Signal 섹션·빈 Body 헤더 줄 제거)로
+    폴백 — 헤더 변형 응답이 스켈레톤 포함 전문으로 임베딩되는 걸 막는다.
+    계약 무관 구형 응답은 어느 패턴에도 안 걸려 전문 그대로(하위호환).
+    """
+    t = (text or "").strip()
+    m = _BODY_SEC.search(t)
+    if m:
+        body = m.group(1).strip()
+        if body:
+            return body
+    t2 = _BODY_HDR_BARE.sub("", _SKEL_SEC.sub("", t)).strip()
+    return t2 if t2 else t
 
 
 def _item_records(samples: list[Sample]) -> list[dict]:
-    """샘플 → 아이템 단위 레코드(모델/서브/프롬프트/원문). metaphor는 응답 전체=1항목
-    (형식 계약 응답은 ## Body 섹션만)."""
+    """샘플 → 아이템 단위 레코드(모델/서브/프롬프트/원문).
+
+    모든 서브에서 Body 추출(_main_text) 후 파싱 — 리스트 서브도 불릿/번호로
+    쓰인 Brief/Signal 메타-코멘터리가 아이디어 항목으로 새는 걸 차단
+    (MAX 집계라 누수 1개가 서브 점수를 통째로 정할 수 있음).
+    metaphor는 본문 전체=1항목. fmt 샘플은 계약 준수 여부(fmt_ok)도 기록.
+    """
     recs = []
     for s in samples:
         if not s.get("ok", True):
             continue
         sub = _sub_of(s)
         text = s.get("text", "") or ""
-        items = parse_items(text) if sub != "metaphor" else [_main_text(text)]
+        fmt = (s.get("meta") or {}).get("fmt")
+        main = _main_text(text)
+        items = parse_items(main) if sub != "metaphor" else [main]
+        fmt_ok = bool(_BODY_SEC.search(text)) if fmt else None
         for it in items:
             if it:
                 recs.append({"model": s["model"], "sub": sub,
                              "probe_id": s.get("probe_id"), "prompt": _prompt_of(s),
-                             "item": it, "resp_text": text, "resp_items": items})
+                             "item": it, "resp_text": text, "resp_items": items,
+                             "fmt": fmt, "fmt_ok": fmt_ok})
     return recs
 
 
@@ -165,6 +200,29 @@ def score_pool(per_model: dict[str, list[Sample]]) -> dict[str, AxisResult]:
         all_recs += _item_records(per_model[m])
     acc = _score_from_recs(all_recs)
 
+    # 감사(적대 검증에서 확정된 오염 경로 감시):
+    #  · fmt 혼합 풀 — 병합 디렉터리에서 계약/무계약 응답이 한 LOF 풀에 섞이면 조건이 교란변수
+    #  · 계약 준수율 — 미준수는 불이익이 아니라 아웃라이어 '보상'으로 귀결되므로 반드시 표기
+    #  · 소풀 서브 — 모델당 1항목이면 LOF가 퇴화해 novelty가 양자화(순위 널뛰기)
+    fmts = {r["fmt"] for r in all_recs}
+    n_fmt = ok_fmt = 0
+    for m in models:
+        for s in per_model[m]:
+            if s.get("ok", True) and (s.get("meta") or {}).get("fmt"):
+                n_fmt += 1
+                ok_fmt += bool(_BODY_SEC.search(s.get("text", "") or ""))
+    sub_pool_n: dict[str, int] = defaultdict(int)
+    for r in all_recs:
+        sub_pool_n[r["sub"]] += 1
+    low_subs = sorted(s for s, n in sub_pool_n.items() if n < 2 * max(1, len(models)))
+    audit = ""
+    if len(fmts) > 1:
+        audit += f"⚠ fmt 혼합 풀(조건 교란): {sorted(map(str, fmts))}. "
+    if n_fmt:
+        audit += f"계약 준수 {ok_fmt}/{n_fmt}. "
+    if low_subs:
+        audit += f"저신뢰 서브(모델당 <2항목, 양자화 노이즈): {','.join(low_subs)}. "
+
     results = {}
     for m in models:
         a = acc.get(m)
@@ -177,7 +235,8 @@ def score_pool(per_model: dict[str, list[Sample]]) -> dict[str, AxisResult]:
         results[m] = AxisResult(
             axis="creativity", score=round(model_score * 100, 2), n=n_items,
             subscores={f"max_{sub}": round(v * 100, 1) for sub, v in sub_max.items()},
-            detail=a["detail"], note="독창=LOF희소성(MAX)×온토픽×검증. " + CEILING_NOTE)
+            detail=a["detail"],
+            note=audit + "독창=LOF희소성(MAX)×온토픽×검증. " + CEILING_NOTE)
     return results
 
 

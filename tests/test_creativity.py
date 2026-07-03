@@ -203,3 +203,73 @@ def test_metaphor_item_full_text_without_contract():
     text = "A vector embedding is a sommelier's palate for meaning."
     recs = cr._item_records([_sample("A", "creativity-metaphor-0", "metaphor", text)])
     assert recs[0]["item"] == text
+
+
+# --- 적대 검증(2026-07-03)에서 확정된 Body 추출 실패 모드 회귀 테스트 ---
+def test_main_text_inline_body_not_swallowed():
+    text = ("## Brief — restate.\n"
+            "## Body — The whole answer sits on the header line here.\n"
+            "## Signal — the twist.")
+    assert cr._main_text(text) == "The whole answer sits on the header line here."
+
+
+def test_main_text_partial_inline_body_keeps_first_sentence():
+    text = "## Body — First sentence inline.\nSecond sentence.\n## Signal\nmeta."
+    out = cr._main_text(text)
+    assert "First sentence inline." in out and "Second sentence." in out
+    assert "Signal" not in out and "meta" not in out
+
+
+def test_main_text_header_variants_extract_clean_body():
+    for hdr in ("### Body", "## **Body**", "**## Body**", "## body", "## Body:",
+                "**Body:**"):
+        text = f"## Brief\ntask restated.\n{hdr}\nthe real answer.\n## Signal\nmeta."
+        assert cr._main_text(text) == "the real answer.", hdr
+
+
+def test_main_text_no_space_signal_terminator():
+    out = cr._main_text("## Body\nanswer text.\n##Signal\nmeta comment.")
+    assert "answer text." in out and "meta comment" not in out
+
+
+def test_main_text_body_last_and_empty_falls_back_to_skeleton_strip():
+    # Body가 마지막인데 비어있음 → Brief/Signal 제거 폴백, 스켈레톤 임베딩 방지
+    out = cr._main_text("## Brief\ntask restated here.\n## Body")
+    assert "## Body" not in out and "task restated" not in out or out  # 비지 않음
+    assert cr._main_text("") == ""
+
+
+def test_list_sub_bulleted_signal_not_leaked_into_items():
+    # 불릿화된 Signal 메타-코멘터리가 아이디어 항목으로 새면 MAX 집계가 증폭 — 차단 확인
+    text = ("## Brief\nBrainstorm ideas.\n"
+            "## Body\n1. cache reasoning traces\n2. route by difficulty\n"
+            "## Signal\n- Number 2 is the most unconventional element.")
+    recs = cr._item_records([_sample("A", "creativity-tech-0", "tech", text)])
+    items = [r["item"] for r in recs]
+    assert items == ["cache reasoning traces", "route by difficulty"]
+
+
+def test_item_records_track_fmt_compliance():
+    ok = {"probe_id": "p", "model": "A", "ok": True,
+          "text": "## Brief\nt.\n## Body\n1. idea\n## Signal\ns.",
+          "meta": {"subtype": "tech", "prompt": "x", "fmt": "report"}}
+    recs = cr._item_records([ok])
+    assert recs and all(r["fmt"] == "report" and r["fmt_ok"] is True for r in recs)
+
+
+def test_score_pool_notes_flag_mixed_fmt_and_low_pool(monkeypatch):
+    monkeypatch.setattr(cr.embed, "available", lambda: True)
+    monkeypatch.setattr(cr.embed, "embed",
+                        lambda texts, prefix=True: [[float(len(t)), 1.0] for t in texts])
+    fmt_s = {"probe_id": "creativity-metaphor-0", "model": "A", "ok": True,
+             "text": "## Body\nan analogy about consensus voting rounds.",
+             "meta": {"subtype": "metaphor", "prompt": "explain consensus",
+                      "fmt": "report"}}
+    plain_s = {"probe_id": "creativity-metaphor-0", "model": "B", "ok": True,
+               "text": "a different analogy about consensus and committees.",
+               "meta": {"subtype": "metaphor", "prompt": "explain consensus"}}
+    res = cr.score_pool({"A": [fmt_s], "B": [plain_s]})
+    note = res["A"].note
+    assert "fmt 혼합" in note
+    assert "계약 준수 1/1" in note
+    assert "저신뢰 서브" in note and "metaphor" in note

@@ -554,7 +554,8 @@ def html_report(scored: dict, findings_html: str = "") -> str:
 </style></head><body>
 <h1>llm-bench — Opus 세대 사다리 비교 ({len(disp)}모델 × {len(axes_order)}축)</h1>
 <div class="meta">run <code>{manifest['run_id']}</code> · effort {manifest['effort']} ·
- repeats {manifest['repeats']} · cost ${manifest['total_cost_usd']} ·
+ repeats {manifest['repeats']} · seed {manifest.get('seed', '?')} ·
+ fmt {manifest.get('fmt') or '없음(자유형식)'} · cost ${manifest['total_cost_usd']} ·
  errors {manifest['n_errors']} · 가설: 세대↑ = 코딩/실행↑, 대화/창의/스타일↓ ("벤치 최적화 → 자폐화")</div>
 <div class="verdict">{verdict}</div>
 {correlation_card(scored)}
