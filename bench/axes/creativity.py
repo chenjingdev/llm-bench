@@ -20,6 +20,8 @@ from . import _textmetrics as tm
 from .base import AxisResult, Sample
 
 _LINE_ITEM = re.compile(r"^\s*(?:\d+[.):\]]|[-*•·])\s*(.+)$")
+# 형식 계약(fmt=report) 응답의 ## Body 섹션(다음 ## 섹션 전까지)
+_BODY_SEC = re.compile(r"^##\s*Body\b[^\n]*\n(.*?)(?=^##\s|\Z)", re.S | re.M)
 
 CEILING_NOTE = "임베딩 독창성 인간상관 ~0.2–0.3; 거친 순위로만 해석."
 
@@ -73,15 +75,23 @@ def _sub_of(s: Sample) -> str:
     return (s.get("meta") or {}).get("subtype", "open")
 
 
+def _main_text(text: str) -> str:
+    """형식 계약 응답이면 ## Body 본문만(스켈레톤 보일러플레이트가 임베딩에
+    섞여 모델 간 대비를 누르는 걸 방지), 아니면 전체 텍스트."""
+    m = _BODY_SEC.search(text or "")
+    return m.group(1).strip() if m else (text or "").strip()
+
+
 def _item_records(samples: list[Sample]) -> list[dict]:
-    """샘플 → 아이템 단위 레코드(모델/서브/프롬프트/원문). metaphor는 응답 전체=1항목."""
+    """샘플 → 아이템 단위 레코드(모델/서브/프롬프트/원문). metaphor는 응답 전체=1항목
+    (형식 계약 응답은 ## Body 섹션만)."""
     recs = []
     for s in samples:
         if not s.get("ok", True):
             continue
         sub = _sub_of(s)
         text = s.get("text", "") or ""
-        items = parse_items(text) if sub != "metaphor" else [text.strip()]
+        items = parse_items(text) if sub != "metaphor" else [_main_text(text)]
         for it in items:
             if it:
                 recs.append({"model": s["model"], "sub": sub,

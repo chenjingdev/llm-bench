@@ -204,6 +204,7 @@ def run(
     workers: int = 3,
     limit: int | None = None,
     seed: int = 0,
+    fmt: str | None = None,
 ) -> Path:
     """벤치 실행. run_id 디렉터리 경로를 반환."""
     config.ensure_dirs()
@@ -227,7 +228,7 @@ def run(
         if axis == "tooluse":
             plist = scenarios.generate_set(seed=seed, n=6)
         else:
-            plist = probes.build(axis, seed=seed)
+            plist = probes.build(axis, seed=seed, fmt=fmt)
         if limit:
             plist = plist[:limit]
         for model in models:
@@ -273,6 +274,7 @@ def run(
         "axes": axes,
         "seed": seed,
         "limit": limit,
+        "fmt": fmt,
         "n_jobs": len(jobs),
         "n_errors": n_err,
         "total_cost_usd": round(total_cost, 4),

@@ -7,7 +7,7 @@ import json
 from pathlib import Path
 
 from . import axes as axis_mod
-from . import config, report, runner
+from . import config, probes, report, runner
 
 ALL_AXES = list(axis_mod.SCORERS.keys())
 
@@ -17,7 +17,7 @@ def cmd_run(a):
     models = a.models or config.DEFAULT_MODELS
     run_dir = runner.run(
         axes, models, effort=a.effort, repeats=a.repeats,
-        workers=a.workers, limit=a.limit, seed=a.seed,
+        workers=a.workers, limit=a.limit, seed=a.seed, fmt=a.fmt,
     )
     if not a.no_report:
         report.build(run_dir)
@@ -59,6 +59,8 @@ def main(argv=None):
     r.add_argument("--workers", type=int, default=3)
     r.add_argument("--limit", type=int, default=None, help="축당 probe 수 제한(스모크용)")
     r.add_argument("--seed", type=int, default=0)
+    r.add_argument("--fmt", default=None, choices=list(probes.FMT_CONTRACTS),
+                   help="형식 계약(표면 스타일 상수화): report")
     r.add_argument("--no-report", action="store_true")
     r.set_defaults(func=cmd_run)
 

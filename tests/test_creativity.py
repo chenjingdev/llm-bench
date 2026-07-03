@@ -185,3 +185,21 @@ def test_score_fallback_single_model_no_crash(monkeypatch):
                           "1. alpha idea\n2. beta notion\n3. gamma plan")])
     assert 0.0 <= r.score <= 100.0
     assert "폴백" in (r.note or "")
+
+
+# --- 형식 계약 응답의 Body 추출 (metaphor 보일러플레이트 오염 방지) ---
+def test_metaphor_item_uses_body_section_when_contracted():
+    text = ("## Brief\nExplain embeddings via an analogy.\n"
+            "## Body\nA vector embedding is a sommelier's palate: each dimension a "
+            "tasting note, so two wines land close when they taste alike.\n"
+            "## Signal\nThe palate framing is the unconventional part.")
+    recs = cr._item_records([_sample("A", "creativity-metaphor-0", "metaphor", text)])
+    assert len(recs) == 1
+    assert recs[0]["item"].startswith("A vector embedding is a sommelier")
+    assert "##" not in recs[0]["item"]
+
+
+def test_metaphor_item_full_text_without_contract():
+    text = "A vector embedding is a sommelier's palate for meaning."
+    recs = cr._item_records([_sample("A", "creativity-metaphor-0", "metaphor", text)])
+    assert recs[0]["item"] == text

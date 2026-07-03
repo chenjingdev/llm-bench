@@ -226,6 +226,25 @@ def audience_probes(seed: Optional[int] = None, n: int = 4, **_) -> list[Probe]:
 # 축 4 — 창의·발산 (독창성 중심: tech/copy/humor/metaphor)
 # 오염방어: 주제/엔티티 seed 난수화. 포맷 지시로 파싱 안정화.
 # ======================================================================
+# 형식 계약(fmt) — 표면 스타일(오프너/클로저/장식/용어 남발)을 상수로 만들어
+# 순수 아이디어 발산만 남기는 정규화 레이어.
+#   · 뼈대(섹션 구성)만 고정하고 아이디어 공간은 열어둔다.
+#     (문장까지 규격화하면 임베딩이 수렴해 측정하려는 발산 신호 자체가 죽는다)
+#   · 공정성: user 프롬프트 본문에 부가 → 전 모델(vendor 무관) 동일 조건.
+#     (system 프롬프트는 claude 경로에만 주입 가능해 불공정)
+#   · Body는 기존 파싱 규약(번호 목록 1줄 1항목)을 그대로 유지 → 채점기 무변경.
+FMT_CONTRACTS = {
+    "report": (
+        "\n\nFORMAT CONTRACT — structure your ENTIRE answer as a report with exactly "
+        "these three sections, in this order:\n"
+        "## Brief — restate the task in one sentence.\n"
+        "## Body — the answer itself (for list tasks: the numbered list, one item per "
+        "line; for prose tasks: the requested sentences).\n"
+        "## Signal — one sentence naming the single most unconventional element of "
+        "your Body.\n"
+        "No greeting, no preamble outside the sections, nothing after ## Signal."
+    ),
+}
 _TECH_DOMAINS = [
     ("retrieval-augmented generation (RAG)", "chunk→embed→vector search→rerank"),
     ("long-term memory for coding agents", "store embeddings in a vector DB"),
@@ -260,9 +279,15 @@ _META_CONCEPTS = [
 ]
 
 
-def creativity_probes(seed=None, **_) -> list[Probe]:
-    """4 서브 × 1 probe. 주제 seed 난수화. meta에 subtype+prompt."""
+def creativity_probes(seed=None, fmt=None, **_) -> list[Probe]:
+    """4 서브 × 1 probe. 주제 seed 난수화. meta에 subtype+prompt.
+
+    fmt="report": FMT_CONTRACTS를 프롬프트에 부가(형식 강제). meta.prompt는
+    과제 의미만 유지 → 온토픽 앵커가 계약 보일러플레이트에 안 끌린다.
+    """
     rng = random.Random(seed)
+    contract = FMT_CONTRACTS[fmt] if fmt else ""
+    fmt_meta = {"fmt": fmt} if fmt else {}
     out = []
 
     dom, std = rng.choice(_TECH_DOMAINS)
@@ -271,8 +296,8 @@ def creativity_probes(seed=None, **_) -> list[Probe]:
                    f"Number them 1–12, one idea per line.")
     out.append(Probe(
         id="creativity-tech-0", axis="creativity",
-        prompt=prompt_tech,
-        meta={"subtype": "tech", "prompt": prompt_tech}))
+        prompt=prompt_tech + contract,
+        meta={"subtype": "tech", "prompt": prompt_tech, **fmt_meta}))
 
     concept = rng.choice(_COPY_CONCEPTS)
     prompt_copy = (f"Product: {concept}. Give 10 distinctive product names or taglines. "
@@ -280,16 +305,16 @@ def creativity_probes(seed=None, **_) -> list[Probe]:
                    f"Number them 1–10, one per line.")
     out.append(Probe(
         id="creativity-copy-0", axis="creativity",
-        prompt=prompt_copy,
-        meta={"subtype": "copy", "prompt": prompt_copy}))
+        prompt=prompt_copy + contract,
+        meta={"subtype": "copy", "prompt": prompt_copy, **fmt_meta}))
 
     sit = rng.choice(_HUMOR_SITUATIONS)
     prompt_humor = (f"Write 10 genuinely witty, non-obvious one-liners or satirical takes about: "
                     f"{sit}. Avoid tired, predictable jokes. Number them 1–10, one per line.")
     out.append(Probe(
         id="creativity-humor-0", axis="creativity",
-        prompt=prompt_humor,
-        meta={"subtype": "humor", "prompt": prompt_humor}))
+        prompt=prompt_humor + contract,
+        meta={"subtype": "humor", "prompt": prompt_humor, **fmt_meta}))
 
     cdesc, cword = rng.choice(_META_CONCEPTS)
     prompt_meta = (f"Explain {cdesc} using a fresh, non-obvious analogy — avoid the cliché "
@@ -297,8 +322,8 @@ def creativity_probes(seed=None, **_) -> list[Probe]:
                    f"{cword} actually works. Write 2–4 sentences.")
     out.append(Probe(
         id="creativity-metaphor-0", axis="creativity",
-        prompt=prompt_meta,
-        meta={"subtype": "metaphor", "concept": cword, "prompt": prompt_meta}))
+        prompt=prompt_meta + contract,
+        meta={"subtype": "metaphor", "concept": cword, "prompt": prompt_meta, **fmt_meta}))
     return out
 
 
