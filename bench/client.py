@@ -32,6 +32,10 @@ class CallResult:
     ok: bool = True
     error: str = ""
     raw: dict = field(default_factory=dict)
+    # 프롬프트 캐시 사용량 — claude json/스트리밍 경로에서만 채워진다.
+    # codex/agy는 usage 미보고라 0 유지(정직하게).
+    cache_creation_input_tokens: int = 0
+    cache_read_input_tokens: int = 0
 
 
 def _build_cmd(model: str, prompt: str, effort: str, system: Optional[str],
@@ -123,6 +127,8 @@ def call(
         session_id=data.get("session_id", ""),
         ok=True,
         raw=data,
+        cache_creation_input_tokens=int(usage.get("cache_creation_input_tokens", 0)),
+        cache_read_input_tokens=int(usage.get("cache_read_input_tokens", 0)),
     )
 
 
@@ -146,6 +152,8 @@ def _claude_result_to_callresult(model: str, data: dict) -> CallResult:
         session_id=data.get("session_id", ""),
         ok=True,
         raw=data,
+        cache_creation_input_tokens=int(usage.get("cache_creation_input_tokens", 0)),
+        cache_read_input_tokens=int(usage.get("cache_read_input_tokens", 0)),
     )
 
 

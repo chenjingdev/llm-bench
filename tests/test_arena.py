@@ -5,13 +5,16 @@ build_game을 monkeypatch로 대체해 저장 계약(v2: 참가자=모델×effor
 """
 
 import json
+import os
 import shutil
+import socket
 import statistics
 import threading
 import time
 
 from bench import arena, client, config, embed
 from bench.games import build_game, game_names
+from bench.games import semantle as sm
 from bench.games.semantle import KoreanSemantle, SimilarityFeedback
 
 
@@ -126,8 +129,26 @@ def test_registry_only_semantle():
 # ----------------------------------------------------------------------
 # v1.1.0: 1글자 허용 · 오류 원인 구분 · 백분위 · sim_to_prev · 고착 지표
 # ----------------------------------------------------------------------
-def test_version_is_1_1_0():
-    assert KoreanSemantle.version == "1.1.0"
+def test_version_is_1_3_0():
+    assert KoreanSemantle.version == "1.3.0"
+
+
+def test_oracle_model_reflected_in_metadata(monkeypatch):
+    # 실제 오라클: 임베딩/네트워크 없이 metadata의 embedding_model이 선택 모델을 담는지.
+    monkeypatch.setattr(sm.embed, "model_info",
+                        lambda m: {"name": m, "digest": "sha256:deadbeef"})
+    monkeypatch.setattr(sm.embed, "embed",
+                        lambda words, prefix=True, *, model=None: [[0.0]] * len(words))
+    # 아레나 기본 오라클 모델이 qwen3-embedding:8b로 이관됐다
+    assert sm.ORACLE_MODEL == "qwen3-embedding:8b"
+    default_oracle = sm.EmbeddingOracle(words=("가", "나"))
+    assert default_oracle.metadata["embedding_model"] == "qwen3-embedding:8b"
+    assert default_oracle.metadata["embedding_digest"] == "sha256:deadbeef"
+    # 명시 모델도 그대로 반영
+    explicit = sm.EmbeddingOracle(words=("가", "나"), model="qwen3-embedding:4b")
+    assert explicit.metadata["embedding_model"] == "qwen3-embedding:4b"
+    # FakeOracle 계열은 무영향(자체 metadata 유지)
+    assert FakeOracle().metadata["embedding_model"] == "fake-embedder"
 
 
 def test_single_char_guess_is_valid():
@@ -161,6 +182,30 @@ def test_render_shows_percentile_and_rule():
     assert "상위 50%" in text
     assert "지금까지 최고: 2위 (상위 50%)" in text
     assert "한 글자 이상의 한국어 단어" in text
+
+
+def test_render_prefix_stable_for_cache_alignment():
+    # 연속 두 턴의 프롬프트 공통 prefix가 (규칙 + 이전 기록 전체)를 포함하고,
+    # 변동부(현재 턴/최고/출력 지시)는 그 뒤에만 와야 캐시가 정렬된다.
+    game = KoreanSemantle(FakeOracle(), max_turns=10)
+    state = game.reset(1)
+    game.step(state, game.parse("GUESS 활동"))     # 비타깃(rank 3) → 해결 안 됨
+    p_k = game.render(state)                        # 기록 1행
+    game.step(state, game.parse("GUESS 생각"))
+    p_k1 = game.render(state)                       # 기록 2행(append-only 연장)
+
+    common = os.path.commonprefix([p_k, p_k1])
+    assert "매 응답에는 정확히 한 개의 행동만 포함하세요." in common   # 고정 규칙
+    assert "이전 기록:" in common
+    assert "1. 활동" in common                       # 기존 기록행이 prefix에 그대로
+    # 변동부는 공통 prefix에 없다(divergence 뒤에만)
+    assert "현재 턴:" not in common
+    assert "지금까지 최고:" not in common
+    # 그리고 각 프롬프트에서 변동부는 공통 prefix 뒤 꼬리에 존재
+    assert "현재 턴:" in p_k[len(common):]
+    assert "현재 턴:" in p_k1[len(common):]
+    # 규칙+기록 순서 확인: '이전 기록:'이 '현재 턴:'보다 앞
+    assert p_k.index("이전 기록:") < p_k.index("현재 턴:")
 
 
 def test_sim_to_prev_is_deterministic():
@@ -410,7 +455,7 @@ def test_workers_param_caps_concurrency(monkeypatch, tmp_path):
     assert st["max"] == 2      # 병렬성 실제 동작
 
 
-def test_default_concurrency_capped_at_twelve(monkeypatch, tmp_path):
+def test_default_concurrency_capped_at_thirty_two(monkeypatch, tmp_path):
     game = KoreanSemantle(FakeOracle(), max_turns=1)
     monkeypatch.setattr(arena, "build_game", lambda *a, **k: game)
     monkeypatch.setattr(embed, "available", lambda: True)
@@ -429,10 +474,11 @@ def test_default_concurrency_capped_at_twelve(monkeypatch, tmp_path):
                                  session_id="s")
 
     monkeypatch.setattr(client, "call", slow_call)
-    parts = [f"m{i}@low" for i in range(14)]   # 14 > 12
+    parts = [f"m{i}@low" for i in range(34)]   # 34 > 32
     arena.run_arena("ko-semantle", parts, episodes=1, max_turns=1,
-                    seed_base=1, run_root=tmp_path)   # workers=None → 상한 12
-    assert st["max"] <= 12
+                    seed_base=1, run_root=tmp_path)   # workers=None → 상한 32
+    assert st["max"] <= 32
+    assert st["max"] >= 19    # 19개 선택 시 전원 동시 시작 보장(순차 투입 회귀 방지)
 
 
 def test_verify_detects_tampered_score(monkeypatch, tmp_path):
@@ -478,7 +524,7 @@ def test_verify_handles_legacy_run(monkeypatch, tmp_path):
 
 
 def test_verify_skips_on_game_version_mismatch(monkeypatch, tmp_path):
-    game = KoreanSemantle(FakeOracle(), max_turns=3)   # version 1.1.0
+    game = KoreanSemantle(FakeOracle(), max_turns=3)   # version 1.3.0
     _patch_engine(monkeypatch, game)
     run_dir = arena.run_arena("ko-semantle", ["m-a@low"], episodes=1, max_turns=3,
                               seed_base=5, run_root=tmp_path)
@@ -491,7 +537,7 @@ def test_verify_skips_on_game_version_mismatch(monkeypatch, tmp_path):
     man_path.write_text(json.dumps(man, ensure_ascii=False), encoding="utf-8")
     assert arena.verify_run(run_dir) == {
         "ok": None, "skipped": "game-version-mismatch",
-        "manifest_version": "1.0.0", "current_version": "1.1.0"}
+        "manifest_version": "1.0.0", "current_version": "1.3.0"}
 
 
 def test_verify_skips_without_ollama(monkeypatch, tmp_path):
@@ -593,7 +639,10 @@ def test_claude_stream_parser_accumulates_text_delta_only(monkeypatch):
         json.dumps({"type": "stream_event", "event": {"type": "content_block_delta",
                     "delta": {"type": "text_delta", "text": "바다"}}}),
         json.dumps({"type": "result", "subtype": "success", "result": "GUESS 바다",
-                    "total_cost_usd": 0.02, "usage": {"input_tokens": 7, "output_tokens": 3},
+                    "total_cost_usd": 0.02,
+                    "usage": {"input_tokens": 7, "output_tokens": 3,
+                              "cache_creation_input_tokens": 4,
+                              "cache_read_input_tokens": 14900},
                     "duration_ms": 55, "session_id": "sess-1", "is_error": False}),
     ]
     monkeypatch.setattr(client.subprocess, "Popen", lambda *a, **k: _FakePopen(lines))
@@ -601,12 +650,14 @@ def test_claude_stream_parser_accumulates_text_delta_only(monkeypatch):
     r = client.call("claude-haiku-4-5", "프롬프트", effort="low", on_text=seen.append)
     # text_delta만 누적, thinking_delta 제외
     assert seen == ["GUESS ", "GUESS 바다"]
-    # 마지막 result 이벤트에서 CallResult 조립(json 모드와 동일 의미)
+    # 마지막 result 이벤트에서 CallResult 조립(json 모드와 동일 의미) + 캐시 사용량
     assert r.ok is True
     assert r.text == "GUESS 바다"
     assert r.cost_usd == 0.02
     assert r.input_tokens == 7 and r.output_tokens == 3
     assert r.duration_ms == 55 and r.session_id == "sess-1"
+    assert r.cache_creation_input_tokens == 4
+    assert r.cache_read_input_tokens == 14900
 
 
 def test_claude_stream_missing_result_is_error(monkeypatch):
@@ -616,6 +667,212 @@ def test_claude_stream_missing_result_is_error(monkeypatch):
     r = client.call("claude-haiku-4-5", "p", effort="low", on_text=lambda s: None)
     assert r.ok is False
     assert "result" in r.error or "exit" in r.error
+
+
+# ----------------------------------------------------------------------
+# usage 기록: CallResult 캐시 필드 + 턴 이벤트 usage 오브젝트
+# ----------------------------------------------------------------------
+def test_callresult_cache_fields_default_zero():
+    r = client.CallResult("m", "t", 0.0, 0, 0, 0, "s")
+    assert r.cache_creation_input_tokens == 0
+    assert r.cache_read_input_tokens == 0
+
+
+def test_claude_json_path_records_cache_usage(monkeypatch):
+    payload = {"result": "GUESS 바다", "total_cost_usd": 0.01,
+               "usage": {"input_tokens": 10, "output_tokens": 2,
+                         "cache_creation_input_tokens": 6,
+                         "cache_read_input_tokens": 26272},
+               "duration_ms": 30, "session_id": "s", "is_error": False}
+
+    class _R:
+        returncode = 0
+        stdout = json.dumps(payload)
+        stderr = ""
+
+    monkeypatch.setattr(client.subprocess, "run", lambda *a, **k: _R())
+    r = client.call("claude-haiku-4-5", "p", effort="low")   # on_text=None → json 경로
+    assert r.text == "GUESS 바다"
+    assert r.cache_creation_input_tokens == 6
+    assert r.cache_read_input_tokens == 26272
+
+
+_USAGE_KEYS = {"input_tokens", "output_tokens", "cache_creation_input_tokens",
+               "cache_read_input_tokens", "cost_usd", "duration_ms"}
+
+
+def test_turn_event_records_usage(monkeypatch, tmp_path):
+    game = KoreanSemantle(FakeOracle(), max_turns=1)
+    monkeypatch.setattr(arena, "build_game", lambda *a, **k: game)
+    monkeypatch.setattr(embed, "available", lambda: True)
+
+    def fake_call(model, prompt, **kwargs):
+        return client.CallResult(model=model, text="GUESS 의사", cost_usd=0.012,
+                                 input_tokens=100, output_tokens=5, duration_ms=42,
+                                 session_id="s", cache_creation_input_tokens=80,
+                                 cache_read_input_tokens=14900)
+
+    monkeypatch.setattr(client, "call", fake_call)
+    run_dir = arena.run_arena("ko-semantle", ["m@low"], episodes=1, max_turns=1,
+                              seed_base=1, run_root=tmp_path)
+    events = [json.loads(l) for l in
+              (run_dir / "models" / "m@low" / "events.jsonl").read_text(
+                  encoding="utf-8").splitlines()]
+    turn = next(e for e in events if e["type"] == "turn")
+    assert set(turn["usage"]) == _USAGE_KEYS
+    assert turn["usage"] == {"input_tokens": 100, "output_tokens": 5,
+                             "cache_creation_input_tokens": 80,
+                             "cache_read_input_tokens": 14900,
+                             "cost_usd": 0.012, "duration_ms": 42}
+    # raw 전문 보존 계약 무접촉: raw는 그대로, target 누출 없음
+    assert turn["raw"] == "GUESS 의사"
+    assert "target" not in turn
+    # 재생 검증은 usage를 무시하고 통과
+    assert arena.verify_run(run_dir)["ok"] is True
+
+
+# ----------------------------------------------------------------------
+# 런 로버스트니스: 오라클 재시도 + 참가자 격리
+# ----------------------------------------------------------------------
+class _FakeEmbedResp:
+    def __init__(self, vec):
+        self._vec = vec
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+    def read(self):
+        return json.dumps({"embeddings": [self._vec]}).encode()
+
+
+def test_embed_retries_transient_failure_then_succeeds(monkeypatch):
+    embed._cache.clear()
+    calls = {"n": 0}
+
+    def flaky(req, timeout=None):
+        calls["n"] += 1
+        if calls["n"] < 3:                       # 1·2회 실패 → 3회째 성공
+            raise socket.timeout("timed out")
+        return _FakeEmbedResp([0.1, 0.2])
+
+    monkeypatch.setattr(embed.urllib.request, "urlopen", flaky)
+    monkeypatch.setattr(embed.time, "sleep", lambda s: None)   # 백오프 즉시
+    vecs = embed.embed(["재시도프로브"], prefix=False, model="probe")
+    assert vecs == [[0.1, 0.2]]
+    assert calls["n"] == 3                        # 최초 + 재시도 2회
+
+
+def test_embed_raises_after_retries_exhausted(monkeypatch):
+    import pytest
+    embed._cache.clear()
+
+    def always_fail(req, timeout=None):
+        raise socket.timeout("timed out")
+
+    monkeypatch.setattr(embed.urllib.request, "urlopen", always_fail)
+    monkeypatch.setattr(embed.time, "sleep", lambda s: None)
+    with pytest.raises(OSError):
+        embed.embed(["소진프로브"], prefix=False, model="probe")
+
+
+class _RetryProbeOracle:
+    """evaluate가 embed.embed(재시도 포함)를 경유하는 오라클."""
+    words = ("학교", "의사")
+    model = "probe"
+
+    @property
+    def metadata(self):
+        return {"embedding_model": self.model, "reference_words": 2,
+                "vocab_digest": "sha256:probe"}
+
+    def prepare(self, target):
+        return {"target": target}
+
+    def evaluate(self, prepared, guess):
+        if guess == prepared["target"]:
+            return SimilarityFeedback(1.0, 1)
+        embed.embed([guess], prefix=False, model=self.model)   # 네트워크 경유
+        return SimilarityFeedback(0.5, 3)
+
+
+def test_turn_progresses_after_oracle_retry(monkeypatch):
+    embed._cache.clear()
+    calls = {"n": 0}
+
+    def flaky(req, timeout=None):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise socket.timeout("timed out")     # 1회 실패
+        return _FakeEmbedResp([0.1, 0.2])
+
+    monkeypatch.setattr(embed.urllib.request, "urlopen", flaky)
+    monkeypatch.setattr(embed.time, "sleep", lambda s: None)
+    game = KoreanSemantle(_RetryProbeOracle(), max_turns=3)
+    state = game.reset(1)
+    ev = game.step(state, game.parse("GUESS 무지개"))   # 비타깃 → embed 경유
+    assert ev["valid"] is True                          # 재시도로 흡수 → 턴 정상 진행
+    assert ev["guess"] == "무지개"
+    assert calls["n"] == 2                              # 1회 실패 + 1회 재시도 성공
+
+
+class _PoisonOracle(FakeOracle):
+    """특정 추측에서 지속적으로 죽는 오라클(재시도 소진 결과를 흉내)."""
+
+    def evaluate(self, prepared, guess):
+        if guess == "폭탄":
+            raise socket.timeout("timed out")
+        return super().evaluate(prepared, guess)
+
+
+def test_participant_failure_is_isolated(monkeypatch, tmp_path):
+    game = KoreanSemantle(_PoisonOracle(), max_turns=2)
+    monkeypatch.setattr(arena, "build_game", lambda *a, **k: game)
+    monkeypatch.setattr(embed, "available", lambda: True)
+
+    def call(model, prompt, *, on_text=None, **kwargs):
+        full = f"GUESS {'폭탄' if 'bad' in model else '의사'}"
+        if on_text is not None:
+            on_text(full)
+        return client.CallResult(model, full, 0.0, 1, 1, 1, "s")
+
+    monkeypatch.setattr(client, "call", call)
+    run_dir = arena.run_arena("ko-semantle", ["good@low", "bad@low"],
+                              episodes=1, max_turns=2, seed_base=1, run_root=tmp_path)
+
+    manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
+    # 부분 실패: 런 전체가 아니라 실패 참가자만 기록, status는 done
+    assert manifest["status"] == "done"
+    assert {f["slug"] for f in manifest.get("failed_participants", [])} == {"bad@low"}
+
+    # 완주 참가자는 정상 마감(running으로 안 남음)
+    good_live = json.loads((run_dir / "models" / "good@low" / "live.json"
+                            ).read_text(encoding="utf-8"))
+    assert good_live["phase"] == "done"
+    assert "error" not in good_live
+    good_summary = json.loads((run_dir / "models" / "good@low" / "summary.json"
+                               ).read_text(encoding="utf-8"))
+    assert good_summary.get("status") != "failed"
+
+    # 실패 참가자는 live/summary에 failed + error 마킹
+    bad_live = json.loads((run_dir / "models" / "bad@low" / "live.json"
+                           ).read_text(encoding="utf-8"))
+    assert bad_live["phase"] == "failed"
+    assert bad_live["error"]
+    bad_summary = json.loads((run_dir / "models" / "bad@low" / "summary.json"
+                              ).read_text(encoding="utf-8"))
+    assert bad_summary["status"] == "failed"
+    assert bad_summary["error"]
+
+    # verify는 완주분 검증 통과(실패분은 이벤트가 없어 무해)
+    assert arena.verify_run(run_dir)["ok"] is True
+
+    # 정답 누출 금지: error·manifest 어디에도 target 문자열 없음
+    target = game.reset(1).secret
+    assert target not in bad_live["error"]
+    assert target not in json.dumps(manifest, ensure_ascii=False)
 
 
 def test_config_pilot_wiring():

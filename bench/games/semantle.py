@@ -56,11 +56,17 @@ class SimilarityFeedback:
     rank: int
 
 
+# 아레나 오라클 임베딩 모델 — 이 머신 ollama에 keep_alive:-1로 영구 상주(즉답).
+# 검증 결과 prefix 없이(prefix=False) 근접어·분포 분리도가 더 좋아 무프리픽스로 쓴다.
+# embed.py의 기본 MODEL(nomic)은 creativity 등 다른 서브시스템용이라 건드리지 않는다.
+ORACLE_MODEL = "qwen3-embedding:8b"
+
+
 class EmbeddingOracle:
     """Exact cosine rank over a fixed reference vocabulary."""
 
     def __init__(self, words: tuple[str, ...] = REFERENCE_WORDS,
-                 model: str = "qwen3-embedding:4b"):
+                 model: str = ORACLE_MODEL):
         self.words = tuple(dict.fromkeys(words))
         self.model = model
         self.model_identity = embed.model_info(model)
@@ -106,7 +112,7 @@ class EmbeddingOracle:
 
 class KoreanSemantle:
     id = "ko-semantle"
-    version = "1.1.0"
+    version = "1.3.0"
     DEFAULT_MAX_TURNS = 40
 
     def __init__(self, oracle: EmbeddingOracle | None = None, max_turns: int = DEFAULT_MAX_TURNS):
@@ -146,15 +152,19 @@ class KoreanSemantle:
         best = min((e["rank"] for e in state.history if e.get("valid")), default=None)
         best_line = (f"지금까지 최고: {best}위 ({self._pct_label(best, n)})"
                      if best else "지금까지 최고: 없음")
+        # 프롬프트 캐시 정렬: [고정 규칙] → [이전 기록(append-only, 오래된 것부터)]
+        # → [변동부: 현재 턴/최고/출력 지시]. 규칙+기록은 턴이 지나도 바이트가 연장만
+        # 되므로 계정 내 prefix 캐시가 히트한다. 변동부를 뒤로 몰아 초반 prefix가 깨지지
+        # 않게 한다(측정 조건 변경 → version 범프).
         return (
             "비밀 한국어 단어를 찾는 의미 추측 게임입니다.\n"
             "유사도는 고정된 로컬 임베딩으로 계산하며, 높을수록 정답과 의미가 가깝습니다.\n"
             "유사도 절대값은 캘리브레이션이 어렵습니다. 순위와 백분위를 더 신뢰하세요.\n"
             f"순위는 고정 비교 어휘 {n}개 안에서의 참고 순위입니다(낮을수록 정답에 가까움).\n"
             "매 응답에는 정확히 한 개의 행동만 포함하세요.\n\n"
+            f"이전 기록:\n{history}\n\n"
             f"현재 턴: {state.turn + 1}/{state.max_turns}\n"
             f"{best_line}\n\n"
-            f"이전 기록:\n{history}\n\n"
             "다음 형식으로 한 글자 이상의 한국어 단어 하나만 추측하세요.\n"
             "GUESS <단어>"
         )

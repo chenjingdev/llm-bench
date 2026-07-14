@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import math
+import time
 import urllib.request
 
 OLLAMA_BASE = "http://localhost:11434"
@@ -15,6 +16,10 @@ OLLAMA = f"{OLLAMA_BASE}/api/embed"
 MODEL = "nomic-embed-text"
 # nomic-embed-text v1.5는 태스크 프리픽스 권장. 또래 항목 간 유사도/군집엔 clustering.
 _PREFIX = "clustering: "
+
+# 임베딩 호출 재시도 백오프(초). 최초 시도 + len회 재시도. 일시 포화·모델 리로드로
+# 인한 socket.timeout 등이 게임 턴을 통째로 죽이지 않게 흡수한다(소진 시에만 예외).
+EMBED_RETRY_BACKOFF = (2.0, 5.0)
 
 # 캐시 키는 (model, text) — 모델별로 벡터가 다르므로 분리한다.
 _cache: dict[tuple[str, str], list[float]] = {}
@@ -26,6 +31,26 @@ def available() -> bool:
         return True
     except Exception:
         return False
+
+
+def _post_embed(body: bytes) -> dict:
+    req = urllib.request.Request(OLLAMA, data=body,
+                                 headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=120) as r:
+        return json.loads(r.read())
+
+
+def _post_embed_with_retry(body: bytes) -> dict:
+    """임베딩 POST를 재시도. socket.timeout/URLError 등 일시 장애를 흡수한다."""
+    last: BaseException | None = None
+    for attempt in range(len(EMBED_RETRY_BACKOFF) + 1):
+        try:
+            return _post_embed(body)
+        except OSError as exc:  # socket.timeout·URLError 모두 OSError 계열
+            last = exc
+            if attempt < len(EMBED_RETRY_BACKOFF):
+                time.sleep(EMBED_RETRY_BACKOFF[attempt])
+    raise last  # type: ignore[misc]
 
 
 def embed(texts: list[str], prefix: bool = True, *, model: str = MODEL) -> list[list[float]]:
@@ -42,10 +67,7 @@ def embed(texts: list[str], prefix: bool = True, *, model: str = MODEL) -> list[
             todo_idx.append(i)
     if todo:
         body = json.dumps({"model": model, "input": todo}).encode()
-        req = urllib.request.Request(OLLAMA, data=body,
-                                     headers={"Content-Type": "application/json"})
-        with urllib.request.urlopen(req, timeout=120) as r:
-            data = json.loads(r.read())
+        data = _post_embed_with_retry(body)
         embs = data["embeddings"]
         for j, idx in enumerate(todo_idx):
             v = embs[j]

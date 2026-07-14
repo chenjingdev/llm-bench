@@ -26,9 +26,11 @@ from __future__ import annotations
 import json
 import os
 import statistics
+import sys
 import tempfile
 import threading
 import time
+import traceback
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
@@ -37,7 +39,8 @@ from .games import build_game
 
 
 RAW_LIMIT = 600           # live.json 표시용 스니펫 절단 길이(events.jsonl에는 전문 저장)
-MAX_WORKERS_DEFAULT = 12  # 동시 실행 상한 기본값(조합 폭주로 CLI 프로세스가 터지는 것 방지)
+MAX_WORKERS_DEFAULT = 32  # 동시 실행 상한 기본값 = 런처 참가자 상한. "전 모델 동시 플레이"가
+                          # 제품 약속이므로 기본은 전원 동시 시작, 절감은 workers= 인자로.
 VALID_EFFORTS = ("low", "medium", "high", "xhigh", "max")
 _INDEX_LOCK = threading.Lock()
 
@@ -293,6 +296,22 @@ def _best_rank(state) -> int | None:
     return min(ranks) if ranks else None
 
 
+def _usage_of(resp) -> dict:
+    """CallResult → 턴 이벤트 usage 오브젝트(실패/None이면 0)."""
+    if resp is None:
+        return {"input_tokens": 0, "output_tokens": 0,
+                "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0,
+                "cost_usd": 0.0, "duration_ms": 0}
+    return {
+        "input_tokens": resp.input_tokens,
+        "output_tokens": resp.output_tokens,
+        "cache_creation_input_tokens": resp.cache_creation_input_tokens,
+        "cache_read_input_tokens": resp.cache_read_input_tokens,
+        "cost_usd": resp.cost_usd,
+        "duration_ms": resp.duration_ms,
+    }
+
+
 def _play_episode(game, model: str, effort: str, episode: int, seed: int,
                   max_turns: int, events_path: Path, live_path: Path,
                   stream_path: Path, call_timeout: int, retries: int) -> tuple[dict, int]:
@@ -320,6 +339,8 @@ def _play_episode(game, model: str, effort: str, episode: int, seed: int,
             best = _best_rank(state)
             event = _turn_event(episode, step_event, best)
             writer.finish(resp.text)    # 전문 + done=true
+        # 사용량 기록(추가만 — raw 전문 보존 계약 무접촉). resp None이면 0.
+        event["usage"] = _usage_of(resp)
         _append_jsonl(events_path, event)
         _write_json_atomic(live_path, _live(
             model, effort, episode, state.turn, max_turns, "running", event, best))
@@ -342,25 +363,13 @@ def _play_episode(game, model: str, effort: str, episode: int, seed: int,
     return episode_end, result["invalid_actions"]
 
 
-def _run_participant(game, participant: dict, run_dir: Path, seeds: list[int],
-                     max_turns: int, call_timeout: int, retries: int) -> dict:
-    model, effort, slug = participant["model"], participant["effort"], participant["slug"]
-    mdir = _model_dir(run_dir, slug)
-    mdir.mkdir(parents=True, exist_ok=True)
-    events_path = mdir / "events.jsonl"
-    live_path = mdir / "live.json"
-    stream_path = mdir / "stream.json"
+def _exc_str(exc: BaseException) -> str:
+    """예외 요약 문자열(타입+메시지, 300자). 정답 누출 방지를 위해 상태는 넣지 않는다."""
+    return f"{type(exc).__name__}: {exc}"[:300]
 
-    episode_ends: list[dict] = []
-    invalid_total = 0
-    for i, seed in enumerate(seeds):
-        episode = i + 1  # 1-기반(계약: "episode":1)
-        ep_end, invalids = _play_episode(
-            game, model, effort, episode, seed, max_turns,
-            events_path, live_path, stream_path, call_timeout, retries)
-        episode_ends.append(ep_end)
-        invalid_total += invalids
 
+def _build_summary(model: str, effort: str, episode_ends: list[dict],
+                   invalid_total: int, error: str) -> dict:
     scores = [e["score"] for e in episode_ends]
     turns = [e["turns"] for e in episode_ends]
     solved = [e for e in episode_ends if e["solved"]]
@@ -378,14 +387,67 @@ def _run_participant(game, participant: dict, run_dir: Path, seeds: list[int],
                                 if fix_sims else None),
         "invalid_actions": invalid_total,
     }
-    _write_json_atomic(mdir / "summary.json", summary)
-
-    # 최종 live: phase=done (마지막 턴 상태 유지)
-    final = _read_json(live_path)
-    final["phase"] = "done"
-    final["updated_at"] = _now()
-    _write_json_atomic(live_path, final)
+    if error:
+        summary["status"] = "failed"   # 부분 결과 + 실패 마킹(추가만)
+        summary["error"] = error
     return summary
+
+
+def _finalize_live(live_path: Path, model: str, effort: str, max_turns: int,
+                   error: str) -> None:
+    """스레드 종료 시 live.json 마감 — running으로 남지 않게(성공 done / 실패 failed).
+
+    phase="failed"는 계약에 값 추가(웹은 'running'만 특수 취급, 그 외는 done으로 수렴 →
+    안전). 실패 시 error 필드도 추가(둘 다 추가만, 기존 필드 제거/개명 없음).
+    """
+    live = _read_json(live_path)
+    if not live:  # 한 턴도 못 돌았으면 최소 골격이라도
+        live = {"model": model, "effort": effort, "episode": 0, "turn": 0,
+                "max_turns": max_turns, "last_guess": "", "last_similarity": None,
+                "last_rank": None, "best_rank": None, "raw_snippet": ""}
+    live["phase"] = "failed" if error else "done"
+    if error:
+        live["error"] = error
+    live["updated_at"] = _now()
+    _write_json_atomic(live_path, live)
+
+
+def _run_participant(game, participant: dict, run_dir: Path, seeds: list[int],
+                     max_turns: int, call_timeout: int, retries: int) -> dict:
+    """참가자 하나를 플레이. 예외를 잡아 이 참가자만 실패 처리(런은 계속).
+
+    반환: {"ok": bool, "error": str} — run_arena가 부분 실패를 집계한다.
+    """
+    model, effort, slug = participant["model"], participant["effort"], participant["slug"]
+    mdir = _model_dir(run_dir, slug)
+    events_path = mdir / "events.jsonl"
+    live_path = mdir / "live.json"
+    stream_path = mdir / "stream.json"
+
+    episode_ends: list[dict] = []
+    invalid_total = 0
+    error = ""
+    try:
+        mdir.mkdir(parents=True, exist_ok=True)
+        for i, seed in enumerate(seeds):
+            episode = i + 1  # 1-기반(계약: "episode":1)
+            ep_end, invalids = _play_episode(
+                game, model, effort, episode, seed, max_turns,
+                events_path, live_path, stream_path, call_timeout, retries)
+            episode_ends.append(ep_end)
+            invalid_total += invalids
+    except Exception as exc:
+        # 참가자 격리: 이 참가자만 실패. KeyboardInterrupt 등 BaseException은
+        # 여기서 잡지 않고 run_arena 상위로 올려 런 전체를 중단시킨다.
+        error = _exc_str(exc)
+        print(f"[arena] participant {slug} failed: {error}", file=sys.stderr)
+        traceback.print_exc()
+    finally:
+        # 어떤 경로로 끝나든 summary/live를 마감(live가 running으로 남지 않게).
+        summary = _build_summary(model, effort, episode_ends, invalid_total, error)
+        _write_json_atomic(mdir / "summary.json", summary)
+        _finalize_live(live_path, model, effort, max_turns, error)
+    return {"ok": not error, "error": error}
 
 
 def run_arena(game_name: str, participants, *, episodes: int = 3,
@@ -398,7 +460,7 @@ def run_arena(game_name: str, participants, *, episodes: int = 3,
     participants는 [{"model","effort"}] 또는 "model@effort"/"model" 문자열 리스트를
     수용한다. effort 없는 항목은 default `effort`를 쓴다. 같은 (model,effort)는 중복 제거.
     에피소드 i의 seed = seed_base + i, 전 참가자 공유(동일 에피소드 = 동일 정답).
-    동시 실행 상한은 기본 min(len(participants), 12), workers로 조절 가능.
+    동시 실행 상한은 기본 min(len(participants), 32), workers로 조절 가능.
     """
     parts = _normalize_participants(participants, effort)
     if seed_base is None:
@@ -437,24 +499,33 @@ def run_arena(game_name: str, participants, *, episodes: int = 3,
         n_workers = workers
     n_workers = max(1, n_workers)
 
+    failed: list[dict] = []
     try:
         with ThreadPoolExecutor(max_workers=n_workers) as pool:
             futures = {pool.submit(_run_participant, game, p, run_dir, seeds,
                                    max_turns, call_timeout, retries): p
                        for p in parts}
             for fut in as_completed(futures):
-                fut.result()  # 예외 전파
+                p = futures[fut]
+                res = fut.result()  # _run_participant는 Exception을 삼키고 상태를 반환
+                if not res.get("ok", True):
+                    failed.append({"slug": p["slug"], "model": p["model"],
+                                   "effort": p["effort"], "error": res.get("error", "")})
     except BaseException as exc:
+        # 참가자 단위로 못 잡은 치명 오류(KeyboardInterrupt 등)만 여기 도달 → 런 전체 실패.
         manifest["status"] = "failed"
         manifest["finished_at"] = _now()
-        manifest["failure"] = str(exc)
+        manifest["failure"] = _exc_str(exc)
         _write_json_atomic(run_dir / "manifest.json", manifest)
         _index_upsert(arena_root, _index_entry(manifest))
         raise
 
+    # 일부 참가자가 실패해도 완주분은 살린다: status="done" + failed_participants 명시.
     manifest["status"] = "done"
     manifest["finished_at"] = _now()
-    manifest["verify"] = verify_run(run_dir)
+    if failed:
+        manifest["failed_participants"] = failed
+    manifest["verify"] = verify_run(run_dir)  # 완주 참가자만 실질 검증(실패분은 이벤트 없음)
     _write_json_atomic(run_dir / "manifest.json", manifest)
     _index_upsert(arena_root, _index_entry(manifest))
     return run_dir
