@@ -84,8 +84,10 @@ def server(tmp_path, monkeypatch):
 
 LIVE = "arena-fixture-live"          # v2: participants, dir=slug
 DONE = "arena-fixture-done"          # 레거시: dir=모델 id
+FAILED = "arena-fixture-failed"      # v2: status=failed, 고아 레인(live phase=running)
 HK_HIGH = "claude-haiku-4-5@high"
 HK_LOW = "claude-haiku-4-5@low"
+WAIT = "claude-opus-4-6@high"        # 대기 중(디렉터리 없는) 참가자 slug
 
 
 # --- 인덱스 / 페이지 ----------------------------------------------------
@@ -124,7 +126,7 @@ def test_run_schema_v2(server):
     assert data["manifest"]["episodes"] == 2
     assert isinstance(data["manifest"].get("participants"), list)
     models = data["models"]
-    assert len(models) == 5
+    assert len(models) == 6                            # 5 시작 + 1 대기(디렉터리 없음)
     # 같은 모델 두 effort → slug 두 개 존재
     assert HK_HIGH in models and HK_LOW in models
     m = models[HK_HIGH]
@@ -132,6 +134,10 @@ def test_run_schema_v2(server):
     assert m["live"]["model"] == "claude-haiku-4-5"   # 순수 id
     assert m["live"]["effort"] == "high"              # v2 live에 effort
     assert m["summary"]["effort"] == "high"
+    # 대기 중 참가자: manifest 합집합으로 존재하되 live/summary는 None(플레이스홀더)
+    assert WAIT in models
+    assert models[WAIT]["live"] is None
+    assert models[WAIT]["summary"] is None
 
 
 def test_run_schema_legacy(server):
@@ -153,7 +159,54 @@ def test_run_unknown_404(server):
 def test_run_live_never_has_target(server):
     _, data = _get(server.base, f"/api/run/{LIVE}")
     for m in data["models"].values():
-        assert "target" not in m["live"]
+        if m["live"] is not None:                     # 대기 중 참가자는 live=None
+            assert "target" not in m["live"]
+
+
+def test_run_includes_queued_participant_placeholder(server):
+    # manifest엔 있으나 아직 시작 안 해 디렉터리 없는 참가자 → live=None 플레이스홀더로 노출.
+    status, data = _get(server.base, f"/api/run/{LIVE}")
+    assert status == 200
+    assert WAIT in data["models"]
+    assert data["models"][WAIT]["live"] is None
+    assert data["models"][WAIT]["summary"] is None
+    assert data["models"][WAIT]["events_count"] == 0
+    # manifest에는 참가자로 들어있다(합집합 소스).
+    assert WAIT in data["manifest"]["models"]
+    assert any(p.get("slug") == WAIT for p in data["manifest"]["participants"])
+    # 디스크엔 디렉터리가 없다(다른 5개는 존재).
+    on_disk = {p.name for p in (server.root / LIVE / "models").iterdir() if p.is_dir()}
+    assert WAIT not in on_disk
+    assert len(on_disk) == 5
+
+
+# --- 종료된(status=failed) 런: 서버는 진실 그대로, 해석은 클라이언트 ------
+def test_failed_run_served_honestly(server):
+    # 실제 사고 재현: 프로세스 전체 종료(embedding 타임아웃)로 manifest는 failed인데
+    # 참가자 live.json은 고아(phase=running)로 남았다. 서버는 편집 없이 진실을 보고한다.
+    status, data = _get(server.base, f"/api/run/{FAILED}")
+    assert status == 200
+    assert data["manifest"]["status"] == "failed"
+    assert data["manifest"].get("failure")           # 중단 사유 present
+    assert data["manifest"]["finished_at"]           # 종료 시각 present
+    # 고아 레인: live.json이 phase='running' 그대로 서빙되어야 한다(표시 계층에서 해석).
+    phases = {s: (m["live"] or {}).get("phase") for s, m in data["models"].items()}
+    assert any(p == "running" for p in phases.values()), phases
+    # 미완 에피소드(episode_end 없음)라 target 누수 없음.
+    for m in data["models"].values():
+        if m["live"] is not None:
+            assert "target" not in m["live"]
+
+
+def test_failed_run_in_index_after_live(server):
+    # 실패 런은 index에 존재하되 runs[0]은 여전히 LIVE(연대순 최신이어도 뒤에 붙임).
+    status, data = _get(server.base, "/api/index")
+    assert status == 200
+    ids = [r["run_id"] for r in data["runs"]]
+    assert FAILED in ids
+    assert data["runs"][0]["run_id"] == LIVE
+    frow = next(r for r in data["runs"] if r["run_id"] == FAILED)
+    assert frow["status"] == "failed"
 
 
 # --- events 증분 + slug(@) 세그먼트 -------------------------------------
@@ -505,3 +558,13 @@ def test_lane_status_and_denom_in_html():
     assert '방금 기록 갱신' in html
     assert '제자리' in html
     assert '1위 = 정답' in html
+
+
+def test_abort_labels_in_html():
+    # 종료 우선 렌더: 새 상태 칩('중단')과 고아 레인 배지('중단됨') 라벨이 서버 렌더
+    # HTML에 실제로 실려 나가야 한다(isLive/배지 로직은 JS라 문자열 표면만 검증).
+    html = arena_web._render_index()
+    assert '중단됨' in html      # 고아 레인 phase 배지
+    assert '중단' in html        # 상단 상태 칩(중단) — 부분 문자열이지만 별도 단언으로 명시
+    assert '.status.failed' in html   # 중단 상태 CSS 클래스 존재
+    assert '.phase.aborted' in html   # 중단됨 배지 CSS 클래스 존재

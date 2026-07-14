@@ -175,9 +175,10 @@ def _oracle():
             "rank_scope": "pinned-reference-vocabulary"}
 
 
-def _manifest_v2(run_id, participants, episodes, max_turns, status, started, finished):
+def _manifest_v2(run_id, participants, episodes, max_turns, status, started, finished,
+                 failure=None):
     slugs = [p["slug"] for p in participants]
-    return {
+    man = {
         "run_id": run_id, "game": "ko-semantle", "models": slugs,
         "participants": participants,
         "episodes": episodes, "max_turns": max_turns,
@@ -185,6 +186,9 @@ def _manifest_v2(run_id, participants, episodes, max_turns, status, started, fin
         "game_version": "1.0.0", "oracle": _oracle(), "seeds": [1784015657, 42],
         "verify": {"ok": True, "models": {s: {"ok": True, "errors": []} for s in slugs}},
     }
+    if failure is not None:          # 중단 런에만 사유를 싣는다(정상 런엔 키 없음).
+        man["failure"] = failure
+    return man
 
 
 def _manifest_legacy(run_id, models, episodes, max_turns, effort, status, started, finished):
@@ -211,6 +215,9 @@ def build(root) -> Path:
         {"model": "claude-haiku-4-5", "effort": "high", "slug": "claude-haiku-4-5@high"},
         {"model": "claude-haiku-4-5", "effort": "low", "slug": "claude-haiku-4-5@low"},
         {"model": "codex-5.6-luna", "effort": "low", "slug": "codex-5.6-luna@low"},
+        # 대기 중(큐잉된) 참가자: manifest/index엔 있으나 아직 시작 안 해 디렉터리 없음.
+        # 일부러 _write_participant를 호출하지 않는다 → _api_run이 플레이스홀더로 합집합.
+        {"model": "claude-opus-4-6", "effort": "high", "slug": "claude-opus-4-6@high"},
     ]
     lr = root / live_id
 
@@ -308,7 +315,37 @@ def build(root) -> Path:
         done_id, done_models, 1, 12, "low", "done",
         "2026-07-14T17:05:00", "2026-07-14T17:11:40"))
 
+    # ============ 런 F: v2, 프로세스 전체 종료(embedding 소켓 타임아웃) — 고아 레인 ============
+    # 실제 사고 재현: 런은 status="failed"로 끝났는데 참가자 live.json은 phase="running"
+    # 상태로 남았다(고아). episode_end가 없어(finished=False) 정답 미공개 → 표시 계층이
+    # '중단됨'으로 렌더해야 한다(순위/이력은 마지막 진실 그대로 유지).
+    # 모델 주의: test_model_endpoint_participants의 정확 집합 단언을 피하려 claude-haiku-4-5·
+    # claude-opus-4-0을 쓰지 않는다 → opus-4-8@low, sonnet-4-6@high.
+    failed_id = "arena-fixture-failed"
+    fparticipants = [
+        {"model": "claude-opus-4-8", "effort": "low", "slug": "claude-opus-4-8@low"},
+        {"model": "claude-sonnet-4-6", "effort": "high", "slug": "claude-sonnet-4-6@high"},
+    ]
+    ftar = "우물"   # ep1 진행 중(미완) → 어디에도 안 씀(target 은닉)
+    fr = root / failed_id
+    # opus@low: 유효 턴 몇 개(best 7) 후 고아 — live phase=running 남음(이력·최고순위 보존)
+    _write_participant(fr, "claude-opus-4-8@low", "claude-opus-4-8", "low", {
+        1: ([("v", "샘", 0.52, 40), ("v", "물", 0.66, 15), ("v", "지하수", 0.71, 7),
+             ("v", "우물물", 0.69, 9)], False, ftar),
+    }, current_ep=1, phase="running", max_turns=15)
+    # sonnet@high: 유효 턴 몇 개(best 4) 후 고아
+    _write_participant(fr, "claude-sonnet-4-6@high", "claude-sonnet-4-6", "high", {
+        1: ([("v", "구멍", 0.55, 33), ("v", "물", 0.66, 15), ("v", "샘물", 0.73, 6),
+             ("v", "지하수", 0.78, 4)], False, ftar),
+    }, current_ep=1, phase="running", max_turns=15)
+    _write(fr / "manifest.json", _manifest_v2(
+        failed_id, fparticipants, 1, 15, "failed",
+        "2026-07-15T09:02:00", "2026-07-15T09:14:30",
+        failure="embedding socket timeout"))
+
     # ============ index.json (최신 앞) ============
+    # 주의: test_index_schema가 runs[0]==LIVE를 단언한다. 실패 런은 연대순으론 최신이지만
+    # LIVE/DONE 뒤에 붙인다(runs[0]은 LIVE 유지).
     index = {"runs": [
         {"run_id": live_id, "game": "ko-semantle",
          "models": [p["slug"] for p in participants],
@@ -318,6 +355,11 @@ def build(root) -> Path:
          "episodes": 1, "max_turns": 12, "effort": "low",
          "status": "done", "started_at": "2026-07-14T17:05:00",
          "finished_at": "2026-07-14T17:11:40"},
+        {"run_id": failed_id, "game": "ko-semantle",
+         "models": [p["slug"] for p in fparticipants],
+         "episodes": 1, "max_turns": 15, "effort": None,
+         "status": "failed", "started_at": "2026-07-15T09:02:00",
+         "finished_at": "2026-07-15T09:14:30"},
     ]}
     _write(root / "index.json", index)
     return root

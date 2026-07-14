@@ -391,6 +391,13 @@ class _Handler(BaseHTTPRequestHandler):
                     "summary": summary,
                     "events_count": len(events),
                 }
+        # manifest 참가자 전원을 합집합에 — 디렉터리 없는(대기 중) slug는 플레이스홀더
+        manifest_slugs = manifest.get("models")
+        if not isinstance(manifest_slugs, list):
+            manifest_slugs = [p.get("slug") for p in manifest.get("participants", []) if isinstance(p, dict)]
+        for slug in manifest_slugs:
+            if isinstance(slug, str) and SEG_RE.match(slug) and slug not in models_out:
+                models_out[slug] = {"live": None, "summary": None, "events_count": 0}
         self._json({"run_id": run_id, "manifest": manifest, "models": models_out})
 
     def _api_events(self, run_id, model, after):
@@ -578,6 +585,8 @@ header{
 .status .dot{width:8px;height:8px;border-radius:50%}
 .status.live .dot{background:var(--gold);animation:pulse 1.6s ease-in-out infinite}
 .status.done .dot{background:var(--good)}
+.status.failed{background:color-mix(in srgb,var(--warn) 16%,transparent);color:var(--warn)}
+.status.failed .dot{background:var(--warn)}
 @keyframes pulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.35;transform:scale(.7)}}
 
 .meta{display:flex;gap:6px}
@@ -650,6 +659,9 @@ main{flex:1;min-height:0;display:flex;overflow:hidden}
 @keyframes shimmer{0%{opacity:.5}50%{opacity:1}100%{opacity:.5}}
 .lane.solved{border-color:color-mix(in srgb,var(--good) 60%,transparent)}
 .lane.solved::before{background:var(--good)}
+/* 대기 중(아직 시작 안 한 참가자): 뮤트 톤 + 액센트 바 채도 낮춤 */
+.lane.waiting{opacity:.45}
+.lane.waiting::before{filter:saturate(.5)}
 
 /* col1: 순위 위치 */
 .pos{font-size:19px;font-weight:800;color:var(--muted);text-align:center;font-variant-numeric:tabular-nums}
@@ -674,6 +686,8 @@ main{flex:1;min-height:0;display:flex;overflow:hidden}
 .phase.running{color:var(--gold);background:rgba(255,200,87,.13)}
 .phase.done{color:var(--muted);background:var(--surf3)}
 .phase.solvedp{color:var(--good);background:color-mix(in srgb,var(--good) 16%,transparent)}
+.phase.waiting{color:var(--muted);background:var(--surf3)}
+.phase.aborted{color:var(--warn);background:color-mix(in srgb,var(--warn) 15%,transparent)}
 .dense .who .phase{display:none}
 
 /* col3: 헤드라인 순위 */
@@ -1078,8 +1092,9 @@ async function loadEvents(model,fresh){
 }
 function isLive(){
   if(!S.run) return false;
-  const st=(S.run.manifest&&S.run.manifest.status);
-  if(st==='running') return true;
+  const man=S.run.manifest||{};
+  if(man.status==='done'||man.status==='failed'||man.finished_at) return false;   // 종료 우선 — 고아 레인 phase 무시
+  if(man.status==='running') return true;
   for(const m in S.run.models){const l=S.run.models[m].live; if(l&&l.phase==='running') return true;}
   return false;
 }
@@ -1165,9 +1180,17 @@ function viewOf(model,ep){
   if(end&&end.best_rank!=null) bestRank=(bestRank==null)?end.best_rank:Math.min(bestRank,end.best_rank);
   const live=(S.run.models[model]&&S.run.models[model].live)||null;
   const isCur=(ep===currentEpisode());
+  const man=S.run.manifest||{};
+  const runOver=(man.status==='done'||man.status==='failed'||!!man.finished_at);
   let phase='done';
-  if(end) phase = end.solved ? 'solved' : 'done';
-  else if(live && live.phase==='running') phase='running';
+  if(end){ phase = end.solved ? 'solved' : 'done'; }
+  else if(live){
+    if(live.error || live.phase==='failed'){ phase='aborted'; }
+    else if(live.phase==='running'){ phase = runOver ? 'aborted' : 'running'; }   // 종료된 런의 running = 고아
+    else { phase='done'; }                                                        // unknown phase → done
+  }
+  else if(turns.length===0){ phase='waiting'; }   // 아직 시작 안 한 대기 참가자
+  else { phase='done'; }
   const lastValid=[...valid].reverse()[0]||null;
   return {
     episode:ep, turns, valid, last, end, bestRank, phase,
@@ -1216,8 +1239,10 @@ function renderTopbar(){
   $('#runselRid').textContent=S.runId.replace(/^arena-/,'');
   $('#runselSub').textContent=`${models.length} 참가자`;
   const live=isLive();
-  const st=$('#status'); st.className='status '+(live?'live':'done');
-  $('#statusTxt').textContent=live?'LIVE':'완료';
+  const st=$('#status');
+  if(live){ st.className='status live'; $('#statusTxt').textContent='LIVE'; st.title=''; }
+  else if(man.status==='failed'||man.failure){ st.className='status failed'; $('#statusTxt').textContent='중단'; st.title=man.failure?('중단: '+man.failure):'실행 중단됨'; }
+  else { st.className='status done'; $('#statusTxt').textContent='완료'; st.title=''; }
   const nEp=man.episodes||row.episodes||1;
   const ec=$('#epchips');
   if(nEp>1){
@@ -1247,6 +1272,8 @@ function renderBoard(){
   document.getElementById('app').classList.toggle('dense',models.length>6);
   const rows=models.map(m=>({m,v:viewOf(m,S.episode)}));
   rows.sort((a,b)=>{
+    const aw=a.v.phase==='waiting', bw=b.v.phase==='waiting';
+    if(aw!==bw) return aw?1:-1;   // 대기 중은 시작-미랭크 레인보다도 아래(맨 밑)
     const ra=a.v.bestRank, rb=b.v.bestRank;
     if(ra==null&&rb==null) return (b.v.lastSim||0)-(a.v.lastSim||0);
     if(ra==null) return 1; if(rb==null) return -1;
@@ -1272,13 +1299,32 @@ function laneEl(model,v,idx){
   const lane=el('div','lane');
   lane.dataset.slug=model;
   lane.style.setProperty('--mc',`var(${S.colorOf[model]})`);
+  if(S.focus===model) lane.classList.add('sel');
+  lane.onclick=()=>openDrawer(model);
+
+  // 대기 중(디렉터리 없는 참가자): 순위/지표 없이 정체성만 뮤트 표시.
+  if(v.phase==='waiting'){
+    lane.classList.add('waiting');
+    lane.appendChild(el('div','pos',String(idx+1)));
+    const who=el('div','who');
+    who.appendChild(el('span','keydot'));
+    const names=el('div','names');
+    const aline=el('div','aline');
+    aline.appendChild(el('span','alias',aliasOf(model)));
+    const eff=effortOf(model); if(eff) aline.appendChild(el('span','eff',eff));
+    names.appendChild(aline);
+    names.appendChild(el('div','mid',model));
+    names.appendChild(el('span','phase waiting','대기 중'));
+    who.appendChild(names);
+    lane.appendChild(who);
+    return lane;
+  }
+
   // 큰 숫자 색은 가독성 위해 하한을 둔다(후미 모델도 읽히게).
   lane.style.setProperty('--hc',v.bestRank!=null?heatColor(Math.max(0.28,closeness(v.bestRank))):'var(--muted)');
   const leader=(idx===0)&&v.bestRank!=null&&!v.solved&&isLive();
   if(leader) lane.classList.add('leader');
   if(v.solved) lane.classList.add('solved');
-  if(S.focus===model) lane.classList.add('sel');
-  lane.onclick=()=>openDrawer(model);
 
   lane.appendChild(el('div','pos',String(idx+1)));
 
@@ -1290,8 +1336,8 @@ function laneEl(model,v,idx){
   const eff=effortOf(model); if(eff) aline.appendChild(el('span','eff',eff));
   names.appendChild(aline);
   names.appendChild(el('div','mid',model));   // slug 전체(model@effort)
-  const ph=el('span','phase '+(v.solved?'solvedp':v.phase),
-    v.solved?'정답':(v.phase==='running'?'진행 중':'완료'));
+  const phaseLabel = v.solved?'정답' : v.phase==='running'?'진행 중' : v.phase==='aborted'?'중단됨' : v.phase==='waiting'?'대기 중' : '완료';
+  const ph=el('span','phase '+(v.solved?'solvedp':v.phase), phaseLabel);
   names.appendChild(ph);
   who.appendChild(names);
   lane.appendChild(who);
@@ -1388,7 +1434,8 @@ function renderTrend(rows){
   if(legend) legend.innerHTML='';
   if(!host) return;
   host.innerHTML='';
-  if(!rows||!rows.length) return;
+  rows=(rows||[]).filter(r=>r.v.phase!=='waiting');   // 대기 중 참가자는 궤적/범례에서 제외(궤적 없음)
+  if(!rows.length) return;
   const NS='http://www.w3.org/2000/svg';
   const mk=(tag,attrs,cls)=>{const e=document.createElementNS(NS,tag);if(cls)e.setAttribute('class',cls);for(const k in attrs)e.setAttribute(k,attrs[k]);return e;};
   // 참가자별 시리즈(현재 에피소드) — rows[i].v는 viewOf(m,S.episode) 결과.
