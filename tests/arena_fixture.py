@@ -44,6 +44,10 @@ def _write_lines(path: Path, rows: list) -> None:
             fh.write("\n")
 
 
+def _write_stream(run_dir: Path, slug: str, obj) -> None:
+    _write(run_dir / "models" / slug / "stream.json", obj)
+
+
 # --- 턴 스펙 DSL --------------------------------------------------------
 # ("v", 단어, 유사도, 순위)       유효 추측
 # ("dup", 단어)                    무효: 중복 추측(guess 있음)
@@ -236,7 +240,8 @@ def build(root) -> Path:
     _write_participant(lr, "claude-haiku-4-5@low", "claude-haiku-4-5", "low", {
         1: ([("v", "사람", 0.64, 15), ("v", "남자", 0.55, 165), ("v", "인간", 0.59, 95),
              ("v", "개인", 0.62, 48), ("fmt", "GUESS 자\nGUESS 것")], True, ep1_target),
-        2: ([("v", "육지", 0.42, 90), ("v", "해변", 0.63, 20), ("v", "모래", 0.5, 55)], False, ep2_target),
+        2: ([("v", "육지", 0.42, 90), ("v", "해변", 0.63, 20), ("v", "모래", 0.5, 55),
+             ("v", "흙", 0.45, 60), ("v", "땅", 0.48, 48), ("v", "지형", 0.5, 35)], False, ep2_target),
     }, current_ep=2, phase="running", max_turns=15)
 
     # codex-luna@low: ep1 best 40 + 중복/형식 무효, ep2 중위 + 방금 무효
@@ -248,6 +253,36 @@ def build(root) -> Path:
 
     _write(lr / "manifest.json", _manifest_v2(
         live_id, participants, 2, 15, "running", "2026-07-14T18:20:00", None))
+
+    # ---- 라이브 생성 텍스트(stream.json): 모든 상태를 노출 ----
+    # opus@low: 토큰 스트리밍 중(부분, 단어 중간에서 잘림) — done:false
+    _write_stream(lr, "claude-opus-4-8@low", {
+        "model": "claude-opus-4-8", "effort": "low", "episode": 2, "turn": 5,
+        "text": ("바닷물이 3위, 파도가 5위로 꽤 가까워졌다.\n"
+                 "물 그 자체나 큰 물을 가리키는 말이 더 가까울 것 같다.\n"
+                 "다음 후보로 '해"),
+        "done": False, "updated_at": "2026-07-14T18:24:05",
+    })
+    # haiku@high: 토큰 스트리밍 중(부분) — done:false
+    _write_stream(lr, "claude-haiku-4-5@high", {
+        "model": "claude-haiku-4-5", "effort": "high", "episode": 2, "turn": 3,
+        "text": ("해변보다 바닷가가 8위로 조금 더 가까웠다.\n"
+                 "이번엔 물이나 바다에 더 직접적인 단어를 시도한다. '해"),
+        "done": False, "updated_at": "2026-07-14T18:24:04",
+    })
+    # sonnet@medium: 턴 종료(전체 텍스트 확정) — done:true
+    _write_stream(lr, "claude-sonnet-5@medium", {
+        "model": "claude-sonnet-5", "effort": "medium", "episode": 2, "turn": 3,
+        "text": "강물이 18위였으니 물 자체를 직접 노려보자.\nGUESS 바다",
+        "done": True, "updated_at": "2026-07-14T18:23:40",
+    })
+    # codex-luna@low: 델타 없는 대기(codex/gemini는 토큰 델타가 없음) — text:"" done:false
+    _write_stream(lr, "codex-5.6-luna@low", {
+        "model": "codex-5.6-luna", "effort": "low", "episode": 2, "turn": 4,
+        "text": "", "done": False, "updated_at": "2026-07-14T18:24:06",
+    })
+    # haiku@low: stream.json 아예 없음 → 서버가 {text:"",done:true} 반환(레인에 생성줄 없음)
+    #   (일부러 아무것도 쓰지 않는다)
 
     # ============ 런 D: 레거시(participants 없음, dir=모델 id), 완료 ============
     done_id = "arena-fixture-done"

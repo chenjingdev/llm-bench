@@ -10,6 +10,7 @@ API (프론트가 쓰는 JSON 인터페이스):
     GET  /api/index
     GET  /api/run/<run_id>
     GET  /api/run/<run_id>/model/<model>/events?after=N
+    GET  /api/run/<run_id>/model/<model>/stream
     GET  /api/model/<model>
     POST /api/run   {game, models[], episodes, max_turns, effort}
 
@@ -321,6 +322,10 @@ class _Handler(BaseHTTPRequestHandler):
                 after = 0
             self._api_events(parts[2], parts[4], after)
             return
+        if (len(parts) == 6 and parts[0] == "api" and parts[1] == "run"
+                and parts[3] == "model" and parts[5] == "stream"):
+            self._api_stream(parts[2], parts[4])
+            return
         if len(parts) == 3 and parts[0] == "api" and parts[1] == "model":
             self._api_model(parts[2])
             return
@@ -402,6 +407,16 @@ class _Handler(BaseHTTPRequestHandler):
             "run_id": run_id, "model": model,
             "after": after, "count": len(events), "events": safe,
         })
+
+    def _api_stream(self, run_id, model):
+        path = _safe_path(self.root, run_id, "models", model, "stream.json")
+        if path is None:
+            self._error(404, "not found")
+            return
+        data = _read_json(path)
+        if not isinstance(data, dict):
+            data = {"text": "", "done": True}   # absent/unreadable → honest empty-done default
+        self._json(data)
 
     def _api_model(self, model):
         # model은 순수 id(@ 불가). slug의 base(<model>@…)로 참여 여부를 판정.
@@ -619,12 +634,12 @@ main{flex:1;min-height:0;display:flex;overflow:hidden}
 .lane{
   position:relative;flex:0 0 auto;min-height:var(--lane-min);
   display:grid;align-items:center;
-  grid-template-columns:34px 214px 96px 1fr 92px;
+  grid-template-columns:34px 214px 150px 1fr 92px;
   gap:14px;padding:8px 14px 8px 16px;
   background:var(--surf);border:1px solid var(--line);border-radius:12px;
   overflow:hidden;transition:background .18s,border-color .25s,box-shadow .25s;
 }
-.dense .lane{grid-template-columns:30px 190px 84px 1fr 78px;gap:10px;padding:5px 12px 5px 14px}
+.dense .lane{grid-template-columns:30px 190px 128px 1fr 78px;gap:10px;padding:5px 12px 5px 14px}
 .lane:hover{background:var(--surf2);cursor:pointer}
 .lane.sel{border-color:var(--gold)}
 /* 왼쪽 액센트 바 = 정체성 색 */
@@ -669,18 +684,18 @@ main{flex:1;min-height:0;display:flex;overflow:hidden}
 .rankcell .big.flash{animation:rankpop .5s ease}
 @keyframes rankpop{0%{transform:scale(1)}30%{transform:scale(1.14)}100%{transform:scale(1)}}
 .rankcell .unit{font-size:13px;font-weight:600;color:var(--muted);margin-left:1px}
+.rankcell .denom{font-size:12px;font-weight:600;color:var(--muted);margin-left:3px}
 .rankcell .big.na{color:var(--muted);font-size:22px}
 .dense .rankcell .big{font-size:26px}
+.dense .rankcell .denom{font-size:10px}
+.rankcell .stat-upd{font-size:10px;font-weight:700;margin-top:3px;letter-spacing:.02em;line-height:1.1}
+.rankcell .stat-upd.fresh{color:var(--good)}
+.rankcell .stat-upd.stall{color:var(--muted)}
+.rankcell .stat-upd.stall.long{color:var(--warn)}
+.dense .rankcell .stat-upd{font-size:9px}
 
-/* col4: 미터 + 티커 */
+/* col4: 생성문 · 티커 · 기록 */
 .mid-col{display:flex;flex-direction:column;gap:7px;min-width:0}
-.meterrow{display:flex;align-items:center;gap:6px}
-.meterrow .meter{flex:1}
-.mlab{font-size:9px;color:var(--muted);flex:0 0 auto;letter-spacing:.03em}
-.meter{position:relative;height:11px;border-radius:6px;background:var(--surf3);overflow:hidden}
-.meter .fill{position:absolute;left:0;top:0;bottom:0;border-radius:6px;
-  transition:width .5s cubic-bezier(.4,0,.2,1),background .5s}
-.dense .meter{height:8px}
 .ticker{display:flex;align-items:center;gap:9px;min-width:0;font-size:12.5px}
 .ticker .verb{font-size:10px;color:var(--muted);letter-spacing:.05em;flex:0 0 auto}
 .ticker .word{font-weight:750;font-size:15px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:150px}
@@ -813,6 +828,45 @@ input[type=number],select{width:100%;height:38px;padding:0 11px;border-radius:9p
 .empty .big{font-size:19px;color:var(--ink2);font-weight:650}
 .empty .sub{font-size:13px}
 
+/* ---- 생성 중(라이브 공개 출력) 라인 + 이력 스트립(레인) ---- */
+.genline{display:flex;align-items:center;gap:7px;min-width:0;font-size:11.5px}
+.genline .genlab{flex:0 0 auto;font-size:9px;font-weight:700;letter-spacing:.04em;
+  color:var(--gold);background:rgba(255,200,87,.13);border-radius:5px;padding:1px 6px;
+  animation:pulse 1.6s ease-in-out infinite}
+:root[data-theme="light"] .genline .genlab{background:color-mix(in srgb,var(--gold) 14%,transparent)}
+.genline.waiting .genlab{color:var(--muted);background:var(--surf3)}
+.genline .gentail{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+  font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;color:var(--ink2);letter-spacing:-.01em}
+.genline.waiting .gentail{display:none}
+.cursor{flex:0 0 auto;display:inline-block;width:6px;height:1em;background:var(--gold);
+  vertical-align:text-bottom;animation:blink 1s step-end infinite}
+.genline.waiting .cursor{display:none}
+@keyframes blink{0%,50%{opacity:1}50.01%,100%{opacity:0}}
+
+.histstrip{display:flex;align-items:center;gap:5px;min-width:0;overflow:hidden}
+.histstrip .histlab{flex:0 0 auto;font-size:9px;color:var(--muted);letter-spacing:.03em}
+.hchip{flex:0 0 auto;display:inline-flex;align-items:center;gap:4px;max-width:118px;
+  font-size:11px;line-height:1;padding:2px 7px;border-radius:6px}
+.hchip .hw{min-width:0;font-weight:650;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.hchip .hr{flex:0 0 auto;font-size:9.5px;font-weight:600;opacity:.82;font-variant-numeric:tabular-nums}
+.hchip.inv{background:var(--surf3);color:var(--muted);font-weight:700;padding:2px 6px}
+
+/* dense: 이력 숨김, 생성줄은 최소 '생성 중…' 인디케이터만(멀티라인 tail 제거) */
+.dense .histstrip{display:none}
+.dense .genline .gentail,.dense .genline .cursor{display:none}
+.dense .genline .genlab{font-size:8.5px;padding:0 5px}
+.dense .genline:not(.waiting) .genlab::after{content:'…'}
+
+/* ---- 드로어: 생성 중(공개 출력) 라이브 섹션 ---- */
+.dw-gen{flex:0 0 auto;display:none;border-bottom:1px solid var(--line);padding:9px 14px 11px}
+.dw-gen>.lbl{font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--gold);padding:0 2px 7px}
+.dw-gen .genfull-wrap{max-height:172px;overflow-y:auto;background:var(--surf2);
+  border:1px solid var(--line);border-radius:9px;padding:9px 11px;
+  font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;line-height:1.55;
+  color:var(--ink2);white-space:pre-wrap;word-break:break-word}
+.dw-gen .genfull{white-space:pre-wrap}
+.dw-gen .dw-gen-wait{color:var(--muted);font-size:12px;padding:6px 2px}
+
 .hidden{display:none!important}
 </style>
 </head>
@@ -843,8 +897,8 @@ input[type=number],select{width:100%;height:38px;padding:0 11px;border-radius:9p
       <div class="board-head">
         <h2>실시간 순위 · 정답에 가까운 순</h2>
         <div class="legend">
-          <span class="k"><span class="swatch"></span><span class="arrow">가까움 →</span></span>
-          <span class="k">순위 1 = 정답</span>
+          <span class="k"><span class="swatch"></span><span class="arrow">순위 색 = 정답 근접</span></span>
+          <span class="k">1위 = 정답</span>
         </div>
       </div>
       <div id="board"></div>
@@ -919,6 +973,8 @@ const S = {
   focus:null,         // 드로어에 띄운 참가자 slug
   lastTurnKey:{},     // slug -> "ep:turn" (플래시 감지)
   poll:null, loadingRun:false, epPinned:false,  // 사용자가 에피소드를 수동 고정했나
+  stream:{},          // slug -> {text,done,turn,model,effort,episode,...} (라이브 공개 출력)
+  streamPoll:null,    // 1초 스트림 폴링(구조 폴링과 분리)
 };
 
 const $=(s,r=document)=>r.querySelector(s);
@@ -962,7 +1018,7 @@ function showEmpty(on){
 async function selectRun(runId){
   if(S.loadingRun) return;
   S.loadingRun=true;
-  stopPoll();
+  stopPoll(); stopStreamPoll();
   S.runId=runId; S.focus=null; closeDrawer(); S.ev={}; S.lastTurnKey={}; S.epPinned=false;
   try{
     S.run=await jget('/api/run/'+encodeURIComponent(runId));
@@ -975,7 +1031,7 @@ async function selectRun(runId){
   try{ await Promise.all(Object.keys(S.run.models).map(m=>loadEvents(m,true).catch(()=>{}))); }
   finally{ S.loadingRun=false; }
   renderAll();
-  if(isLive()) startPoll();
+  if(isLive()){ startPoll(); startStreamPoll(); }
 }
 function currentEpisode(){
   let ep=1;
@@ -1029,6 +1085,53 @@ function isLive(){
 }
 function startPoll(){ if(S.poll) return; S.poll=setInterval(poll,POLL_MS); }
 function stopPoll(){ if(S.poll){clearInterval(S.poll);S.poll=null;} }
+function startStreamPoll(){ if(S.streamPoll) return; S.streamPoll=setInterval(streamTick,1000); streamTick(); }
+function stopStreamPoll(){ if(S.streamPoll){clearInterval(S.streamPoll);S.streamPoll=null;} }
+async function streamTick(){
+  if(!S.runId||!S.run||!isLive()){ stopStreamPoll(); return; }
+  const running=Object.keys(S.run.models).filter(m=>{
+    const l=S.run.models[m].live; return l&&l.phase==='running';
+  });
+  await Promise.all(running.map(async m=>{
+    try{ S.stream[m]=await jget(`/api/run/${encodeURIComponent(S.runId)}/model/${encodeURIComponent(m)}/stream`); }
+    catch(e){ /* 이전 상태 유지 */ }
+  }));
+  paintStreams();
+}
+function streamState(m){
+  const s=S.stream[m];
+  const l=S.run&&S.run.models[m]&&S.run.models[m].live;
+  const running=l&&l.phase==='running';
+  if(!running||!s||s.done){ return {show:false}; }
+  const text=s.text||'';
+  if(!text.trim()){ return {show:true,waiting:true}; }
+  return {show:true,waiting:false,tail:streamTail(text)};
+}
+function streamTail(text){
+  const lines=String(text).replace(/\r/g,'').split('\n').map(x=>x.trimEnd()).filter(x=>x.length);
+  let tail=lines.slice(-2).join('   ');
+  const MAX=96;
+  if(tail.length>MAX) tail='…'+tail.slice(tail.length-MAX);
+  return tail;
+}
+function applyGen(gl,m){
+  const st=streamState(m);
+  if(!st.show){ gl.style.display='none'; return; }
+  gl.style.display='';
+  const lab=gl.querySelector('.genlab');
+  const tail=gl.querySelector('.gentail');
+  if(st.waiting){ gl.classList.add('waiting'); lab.textContent='생성 중…'; tail.textContent=''; }
+  else{ gl.classList.remove('waiting'); lab.textContent='생성 중'; tail.textContent=st.tail; }
+}
+function paintStreams(){
+  $$('.lane[data-slug]').forEach(lane=>{
+    const gl=lane.querySelector('.genline'); if(gl) applyGen(gl,lane.dataset.slug);
+  });
+  if(S.focus){
+    const l=S.run&&S.run.models[S.focus]&&S.run.models[S.focus].live;
+    if(l&&l.phase==='running') paintDrawerStream(S.focus);
+  }
+}
 async function poll(){
   if(!S.runId) return;
   let run; try{run=await jget('/api/run/'+encodeURIComponent(S.runId));}catch(e){return;}
@@ -1043,7 +1146,7 @@ async function poll(){
   if(isLive() && !S.epPinned) S.episode=currentEpisode();  // 수동 고정 시 폴링이 덮지 않음
   renderAll();
   try{ await loadIndex(false); }catch(e){}
-  if(!isLive()) stopPoll();
+  if(!isLive()){ stopPoll(); stopStreamPoll(); }
 }
 
 /* ---------- 에피소드 뷰 계산(events가 소스) ---------- */
@@ -1082,12 +1185,18 @@ function closeness(rank){ // 0..1, rank1=1. 로그 스케일(상위권 확대) �
   const R=Math.max(2,S.refWords);
   return Math.max(0, Math.min(1, 1-Math.log(rank)/Math.log(R)));
 }
-function heatColor(c){ // c:0..1 -> 히트 램프 보간
+function heatRGB(c){ // c:0..1 -> [r,g,b] on the amber heat ramp
   const stops=['--h0','--h1','--h2','--h3','--h4'];
   const cs=getComputedStyle(document.documentElement);
   const hex=s=>cs.getPropertyValue(s).trim();
   const x=c*(stops.length-1); const i=Math.min(stops.length-2,Math.floor(x)); const f=x-i;
-  return lerpHex(hex(stops[i]),hex(stops[i+1]),f);
+  const a=hx(hex(stops[i])),b=hx(hex(stops[i+1]));
+  return [0,1,2].map(k=>Math.round(a[k]+(b[k]-a[k])*f));
+}
+function heatColor(c){ const p=heatRGB(c); return `rgb(${p[0]},${p[1]},${p[2]})`; }
+function inkOn(rgb){ // 히트색 배경 위 가독 잉크(테마 무관 — 실제 명도로 판정)
+  const lum=0.299*rgb[0]+0.587*rgb[1]+0.114*rgb[2];
+  return lum>150?'#1a1200':'#ffffff';
 }
 function lerpHex(a,b,t){
   const pa=hx(a),pb=hx(b);
@@ -1149,11 +1258,21 @@ function renderBoard(){
   renderTrend(rows);
 }
 
+function statusLine(v){
+  if(!v.valid.length) return null;                 // no valid turn yet → omit
+  let best=Infinity, impIdx=-1;
+  v.valid.forEach((t,i)=>{ if(t.rank!=null && t.rank<best){ best=t.rank; impIdx=i; } });
+  const stall = v.valid.length-1 - impIdx;          // valid turns since last best improvement
+  const s=el('div','stat-upd');
+  if(stall<=0){ s.classList.add('fresh'); s.textContent='▲ 방금 기록 갱신'; }
+  else { s.classList.add('stall'); if(stall>=4) s.classList.add('long'); s.textContent='— '+stall+'턴째 제자리'; }
+  return s;
+}
 function laneEl(model,v,idx){
   const lane=el('div','lane');
+  lane.dataset.slug=model;
   lane.style.setProperty('--mc',`var(${S.colorOf[model]})`);
-  const heat=heatColor(closeness(v.bestRank));
-  // 큰 숫자 색은 가독성 위해 하한을 둔다(후미 모델도 읽히게). 미터는 실제값 사용.
+  // 큰 숫자 색은 가독성 위해 하한을 둔다(후미 모델도 읽히게).
   lane.style.setProperty('--hc',v.bestRank!=null?heatColor(Math.max(0.28,closeness(v.bestRank))):'var(--muted)');
   const leader=(idx===0)&&v.bestRank!=null&&!v.solved&&isLive();
   if(leader) lane.classList.add('leader');
@@ -1182,17 +1301,16 @@ function laneEl(model,v,idx){
   const big=el('div','big'+(v.bestRank==null?' na':''));
   if(v.bestRank!=null){ big.appendChild(document.createTextNode(String(v.bestRank)));
     big.appendChild(el('span','unit','위'));
+    big.appendChild(el('span','denom','/ '+S.refWords));
   } else big.textContent='—';
   rc.appendChild(big);
+  const su=statusLine(v); if(su) rc.appendChild(su);
   lane.appendChild(rc);
 
   const mid=el('div','mid-col');
-  const mrow=el('div','meterrow'); mrow.appendChild(el('span','mlab','근접도'));
-  const meter=el('div','meter'); const fill=el('div','fill');
-  fill.style.width=(closeness(v.bestRank)*100).toFixed(1)+'%';
-  fill.style.background=v.bestRank!=null?`linear-gradient(90deg,var(--h0),${heat})`:'transparent';
-  meter.appendChild(fill); mrow.appendChild(meter); mid.appendChild(mrow);
+  if(v.phase==='running') mid.appendChild(genLine(model));
   mid.appendChild(tickerEl(model,v));
+  const hs=histStrip(model,v); if(hs) mid.appendChild(hs);
   lane.appendChild(mid);
 
   const turns=el('div','turns');
@@ -1209,6 +1327,37 @@ function laneEl(model,v,idx){
   return lane;
 }
 
+function genLine(model){
+  const gl=el('div','genline');
+  gl.appendChild(el('span','genlab','생성 중'));
+  gl.appendChild(el('span','gentail'));
+  gl.appendChild(el('span','cursor'));
+  applyGen(gl,model);          // 구조 렌더 직후 현재 스트림을 즉시 반영(1초 공백 방지)
+  return gl;
+}
+function histStrip(model,v){
+  if(!v.turns.length) return null;
+  const strip=el('div','histstrip');
+  strip.appendChild(el('span','histlab','이력'));
+  let shownValid=0;
+  for(const t of [...v.turns].reverse()){
+    if(shownValid>=8) break;
+    if(t.valid){
+      const c=closeness(t.rank);
+      const chip=el('span','hchip');
+      const rgb=heatRGB(c); chip.style.background=`rgb(${rgb[0]},${rgb[1]},${rgb[2]})`; chip.style.color=inkOn(rgb);
+      chip.appendChild(el('span','hw',t.guess));
+      if(t.rank!=null) chip.appendChild(el('span','hr',t.rank+'위'));
+      strip.appendChild(chip);
+      shownValid++;
+    }else{
+      const chip=el('span','hchip inv',t.guess?'✕':'무효');
+      chip.title=t.guess?'중복 추측':'형식 오류';
+      strip.appendChild(chip);
+    }
+  }
+  return strip;
+}
 function tickerEl(model,v){
   const t=el('div','ticker');
   if(v.solved&&v.target){
@@ -1310,7 +1459,9 @@ function renderDrawer(){
   head.appendChild(top);
   head.appendChild(el('div','mid',model+' · 에피소드 '+S.episode));
   const stats=el('div','dw-stats');
-  stats.appendChild(statEl(v.bestRank!=null?v.bestRank+'위':'—','최고 순위'));
+  const brTile=statEl(v.bestRank!=null?v.bestRank+'위 / '+S.refWords:'—','최고 순위');
+  if(v.bestRank!=null) brTile.querySelector('.v').style.color=heatColor(Math.max(0.28,closeness(v.bestRank)));
+  stats.appendChild(brTile);
   stats.appendChild(statEl(v.lastSim!=null?(v.lastSim*100).toFixed(1):'—','최근 유사도'));
   stats.appendChild(statEl(String(v.valid.length),'유효 추측'));
   stats.appendChild(statEl(String(v.invalidCount),'무효'));
@@ -1321,12 +1472,35 @@ function renderDrawer(){
     head.appendChild(rev);
   }
   dw.appendChild(head);
+  const gen=el('div','dw-gen');
+  gen.appendChild(el('div','lbl','생성 중 (공개 출력)'));
+  const gw=el('div','genfull-wrap');
+  gw.appendChild(el('span','genfull'));
+  gw.appendChild(el('span','cursor'));
+  gen.appendChild(gw);
+  gen.appendChild(el('div','dw-gen-wait','아직 공개 출력이 없어요 (생성 중…)'));
+  dw.appendChild(gen);
+  paintDrawerStream(model);
   const stream=el('div','dw-stream');
   stream.appendChild(el('div','lbl','추측 기록 (공개 출력)'));
   const turnsDesc=[...v.turns].reverse();
   if(turnsDesc.length===0) stream.appendChild(el('div','mid','아직 추측이 없습니다.'));
   turnsDesc.forEach(t=>stream.appendChild(turnRow(t)));
   dw.appendChild(stream);
+}
+function paintDrawerStream(model){
+  const gen=$('#drawer .dw-gen'); if(!gen) return;
+  const st=streamState(model);
+  if(!st.show){ gen.style.display='none'; return; }
+  gen.style.display='block';   // .dw-gen 기본 CSS가 display:none이므로 '' 아닌 명시적 표시
+  const wrap=gen.querySelector('.genfull-wrap');
+  const wait=gen.querySelector('.dw-gen-wait');
+  if(st.waiting){ wrap.style.display='none'; wait.style.display='block'; }
+  else{
+    wait.style.display='none'; wrap.style.display='';
+    gen.querySelector('.genfull').textContent=(S.stream[model]&&S.stream[model].text)||'';
+    wrap.scrollTop=wrap.scrollHeight;
+  }
 }
 function statEl(v,k){const s=el('div','stat');s.appendChild(el('div','v',v));s.appendChild(el('div','k',k));return s;}
 function turnRow(t){
@@ -1339,7 +1513,7 @@ function turnRow(t){
   else { g.appendChild(el('div','w', ((t.raw||'').replace(/\n/g,' ').trim().slice(0,22))||'(빈 응답)')); g.appendChild(el('div','e','형식 오류: GUESS 한 줄 필요')); }
   row.appendChild(g);
   const r=el('div','r');
-  if(t.valid){ r.innerHTML='<span class="s">'+(t.similarity*100).toFixed(1)+'</span><div class="rk">'+t.rank+'위</div>'; }
+  if(t.valid){ r.innerHTML='<span class="s">유사도 '+(t.similarity*100).toFixed(1)+'%</span><div class="rk">'+t.rank+'위</div>'; }
   else r.innerHTML='<div class="rk">—</div>';
   row.appendChild(r);
   if(t.valid){

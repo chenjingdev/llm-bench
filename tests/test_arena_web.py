@@ -212,6 +212,48 @@ def test_events_encoded_at_slug(server):
     assert status == 200 and data["count"] > 0
 
 
+# --- 라이브 생성 텍스트 스트림 ------------------------------------------
+def test_stream_present_matches_fixture(server):
+    status, data = _get(server.base, f"/api/run/{LIVE}/model/claude-opus-4-8@low/stream")
+    assert status == 200
+    assert data["done"] is False
+    assert data["turn"] == 5
+    assert "바닷물" in data["text"]
+    assert data["model"] == "claude-opus-4-8" and data["effort"] == "low"
+
+
+def test_stream_done_full_text(server):
+    status, data = _get(server.base, f"/api/run/{LIVE}/model/claude-sonnet-5@medium/stream")
+    assert status == 200 and data["done"] is True
+    assert "GUESS" in data["text"]
+
+
+def test_stream_waiting_no_deltas(server):
+    status, data = _get(server.base, f"/api/run/{LIVE}/model/codex-5.6-luna@low/stream")
+    assert status == 200 and data["done"] is False and data["text"] == ""
+
+
+def test_stream_absent_defaults(server):
+    # stream.json 없는 running 참가자 → 서버가 정직한 빈-완료 기본값
+    status, data = _get(server.base, f"/api/run/{LIVE}/model/{HK_LOW}/stream")
+    assert status == 200
+    assert data == {"text": "", "done": True}
+
+
+@pytest.mark.parametrize("bad", [
+    "/api/run/arena-fixture-live/model/..%2f..%2f..%2fpasswd/stream",
+    "/api/run/arena-fixture-live/model/foo%2Fbar/stream",
+])
+def test_stream_path_traversal_blocked(server, bad):
+    assert _get(server.base, bad)[0] == 404
+
+
+def test_stream_encoded_at_slug(server):
+    # 프론트는 encodeURIComponent(slug) → @가 %40. 서버가 디코드해 처리(200).
+    status, data = _get(server.base, f"/api/run/{LIVE}/model/claude-haiku-4-5%40high/stream")
+    assert status == 200 and data["done"] is False
+
+
 # --- 모델 단위 조회(참가자/effort) --------------------------------------
 def test_model_endpoint_participants(server):
     status, data = _get(server.base, "/api/model/claude-haiku-4-5")
@@ -456,3 +498,10 @@ def test_full_names_in_rendered_index():
     html = arena_web._render_index()
     assert "Claude Opus 4.8" in html
     assert "GPT-5.6 Sol" in html
+
+
+def test_lane_status_and_denom_in_html():
+    html = arena_web._render_index()
+    assert '방금 기록 갱신' in html
+    assert '제자리' in html
+    assert '1위 = 정답' in html
