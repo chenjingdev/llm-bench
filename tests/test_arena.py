@@ -503,6 +503,121 @@ def test_verify_skips_without_ollama(monkeypatch, tmp_path):
     assert arena.verify_run(run_dir) == {"ok": None, "skipped": "no-ollama"}
 
 
+# ----------------------------------------------------------------------
+# 스트리밍: stream.json 관전 노출 + claude 스트림 파서
+# ----------------------------------------------------------------------
+_STREAM_KEYS = {"model", "effort", "episode", "turn", "text", "done", "updated_at"}
+
+
+def test_stream_writer_sequence(tmp_path):
+    path = tmp_path / "stream.json"
+    w = arena._StreamWriter(path, "claude-haiku-4-5", "low", 1, 4, throttle=0.0)
+    w.begin()
+    s0 = json.loads(path.read_text(encoding="utf-8"))
+    assert set(s0) == _STREAM_KEYS
+    assert s0["text"] == "" and s0["done"] is False
+    assert s0["turn"] == 4 and s0["model"] == "claude-haiku-4-5" and s0["effort"] == "low"
+    w.update("부")
+    assert json.loads(path.read_text(encoding="utf-8"))["text"] == "부"
+    w.update("부산")
+    s2 = json.loads(path.read_text(encoding="utf-8"))
+    assert s2["text"] == "부산" and s2["done"] is False
+    w.finish("부산 갑니다")
+    s3 = json.loads(path.read_text(encoding="utf-8"))
+    assert s3["text"] == "부산 갑니다" and s3["done"] is True   # 마지막 상태는 항상 기록
+
+
+def test_stream_writer_resets_on_retry(tmp_path):
+    path = tmp_path / "stream.json"
+    w = arena._StreamWriter(path, "m", "low", 1, 2, throttle=0.0)
+    w.begin()
+    w.update("abc")
+    assert json.loads(path.read_text(encoding="utf-8"))["text"] == "abc"
+    w.begin()   # 재시도 재호출 → text=""부터 다시
+    s = json.loads(path.read_text(encoding="utf-8"))
+    assert s["text"] == "" and s["done"] is False
+
+
+def _streaming_bot(model, prompt, *, on_text=None, **kwargs):
+    import re
+    m = re.search(r"현재 턴: (\d+)/", prompt)
+    idx = (int(m.group(1)) - 1) if m else 0
+    full = f"GUESS {_BOT_WORDS[idx % len(_BOT_WORDS)]}"
+    if on_text is not None:            # 토큰 단위 누적 흉내
+        acc = ""
+        for ch in full:
+            acc += ch
+            on_text(acc)
+    return client.CallResult(model=model, text=full, cost_usd=0.0, input_tokens=1,
+                             output_tokens=1, duration_ms=1, session_id="s")
+
+
+def test_stream_json_written_and_finalized_during_run(monkeypatch, tmp_path):
+    game = KoreanSemantle(FakeOracle(), max_turns=1)
+    monkeypatch.setattr(arena, "build_game", lambda *a, **k: game)
+    monkeypatch.setattr(embed, "available", lambda: True)
+    monkeypatch.setattr(client, "call", _streaming_bot)
+    run_dir = arena.run_arena("ko-semantle", ["claude-haiku-4-5@low"], episodes=1,
+                              max_turns=1, seed_base=1, run_root=tmp_path)
+    stream = json.loads((run_dir / "models" / "claude-haiku-4-5@low" / "stream.json")
+                        .read_text(encoding="utf-8"))
+    assert set(stream) == _STREAM_KEYS
+    assert stream["model"] == "claude-haiku-4-5" and stream["effort"] == "low"
+    assert stream["done"] is True
+    assert stream["text"].startswith("GUESS")   # 수신 완료 전문
+    assert "target" not in stream               # 관전 뷰에도 정답 누출 없음
+
+
+class _FakePopen:
+    """subprocess.Popen 대역 — 미리 준비한 stream-json 라인을 stdout로 흘린다."""
+
+    def __init__(self, lines):
+        self.stdout = iter(line + "\n" for line in lines)
+        self.stderr = iter(())
+        self.returncode = 0
+
+    def wait(self, timeout=None):
+        return 0
+
+    def kill(self):
+        self.returncode = -9
+
+
+def test_claude_stream_parser_accumulates_text_delta_only(monkeypatch):
+    lines = [
+        json.dumps({"type": "system", "subtype": "init"}),
+        json.dumps({"type": "stream_event", "event": {"type": "content_block_delta",
+                    "delta": {"type": "thinking_delta", "thinking": "속으로 생각"}}}),
+        json.dumps({"type": "stream_event", "event": {"type": "content_block_delta",
+                    "delta": {"type": "text_delta", "text": "GUESS "}}}),
+        json.dumps({"type": "stream_event", "event": {"type": "content_block_delta",
+                    "delta": {"type": "text_delta", "text": "바다"}}}),
+        json.dumps({"type": "result", "subtype": "success", "result": "GUESS 바다",
+                    "total_cost_usd": 0.02, "usage": {"input_tokens": 7, "output_tokens": 3},
+                    "duration_ms": 55, "session_id": "sess-1", "is_error": False}),
+    ]
+    monkeypatch.setattr(client.subprocess, "Popen", lambda *a, **k: _FakePopen(lines))
+    seen = []
+    r = client.call("claude-haiku-4-5", "프롬프트", effort="low", on_text=seen.append)
+    # text_delta만 누적, thinking_delta 제외
+    assert seen == ["GUESS ", "GUESS 바다"]
+    # 마지막 result 이벤트에서 CallResult 조립(json 모드와 동일 의미)
+    assert r.ok is True
+    assert r.text == "GUESS 바다"
+    assert r.cost_usd == 0.02
+    assert r.input_tokens == 7 and r.output_tokens == 3
+    assert r.duration_ms == 55 and r.session_id == "sess-1"
+
+
+def test_claude_stream_missing_result_is_error(monkeypatch):
+    lines = [json.dumps({"type": "stream_event", "event": {"type": "content_block_delta",
+                         "delta": {"type": "text_delta", "text": "부분"}}})]
+    monkeypatch.setattr(client.subprocess, "Popen", lambda *a, **k: _FakePopen(lines))
+    r = client.call("claude-haiku-4-5", "p", effort="low", on_text=lambda s: None)
+    assert r.ok is False
+    assert "result" in r.error or "exit" in r.error
+
+
 def test_config_pilot_wiring():
     assert config.GAME_PILOT_MODELS == ["claude-haiku-4-5", "codex-5.6-luna"]
     assert config.CODEX_MODELS["codex-5.6-luna"] == "gpt-5.6-luna"

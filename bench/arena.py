@@ -224,14 +224,62 @@ def _live(model: str, effort: str, episode: int, turn: int, max_turns: int,
     }
 
 
+class _StreamWriter:
+    """턴 진행 중 공개 출력을 stream.json으로 노출(관전용 일시 상태).
+
+    stream.json은 재생 검증 대상이 아니다. 쓰기는 throttle초 스로틀하되, 마지막
+    상태(finish)는 반드시 기록한다. 재시도로 재호출되면 begin()이 text=""로 리셋한다.
+    """
+
+    def __init__(self, path: Path, model: str, effort: str, episode: int,
+                 turn: int, throttle: float = 0.2):
+        self.path = Path(path)
+        self.base = {"model": model, "effort": effort,
+                     "episode": episode, "turn": turn}
+        self.throttle = throttle
+        self.text = ""
+        self._last = 0.0
+
+    def _flush(self, done: bool) -> None:
+        data = dict(self.base)
+        data["text"] = self.text
+        data["done"] = done
+        data["updated_at"] = _now()
+        _write_json_atomic(self.path, data)
+
+    def begin(self) -> None:
+        self.text = ""
+        self._last = time.monotonic()
+        self._flush(False)
+
+    def update(self, so_far: str) -> None:
+        self.text = so_far
+        now = time.monotonic()
+        if now - self._last >= self.throttle:
+            self._last = now
+            self._flush(False)   # 스로틀로 건너뛴 마지막 상태는 finish가 보장
+
+    def finish(self, text: str | None = None) -> None:
+        if text is not None:
+            self.text = text
+        self._flush(True)
+
+
 # ----------------------------------------------------------------------
 # 실행
 # ----------------------------------------------------------------------
-def _call(model: str, prompt: str, effort: str, timeout: int, retries: int = 1):
-    """모델 1턴 호출(재시도 retries회). 실패 시 (None, error)."""
+def _call(model: str, prompt: str, effort: str, timeout: int, retries: int,
+          writer: "_StreamWriter"):
+    """모델 1턴 호출(재시도 retries회). 실패 시 (None, error).
+
+    호출마다 writer.begin()으로 stream을 리셋(재시도면 text=""부터 다시)하고,
+    스트리밍 콜백(writer.update)을 client에 넘긴다.
+    """
     last_err = ""
     for attempt in range(retries + 1):
-        resp = client.call(model, prompt, effort=effort, timeout=timeout)
+        writer.begin()
+        resp = client.call(model, prompt, effort=effort, timeout=timeout,
+                           on_text=writer.update)
         if resp.ok:
             return resp, ""
         last_err = resp.error or "model_error"
@@ -247,11 +295,13 @@ def _best_rank(state) -> int | None:
 
 def _play_episode(game, model: str, effort: str, episode: int, seed: int,
                   max_turns: int, events_path: Path, live_path: Path,
-                  call_timeout: int, retries: int) -> tuple[dict, int]:
+                  stream_path: Path, call_timeout: int, retries: int) -> tuple[dict, int]:
     state = game.reset(seed)
     while not state.done:
+        # 진행 중인 턴 번호(= 다음에 채워질 턴)로 stream sink를 연다.
+        writer = _StreamWriter(stream_path, model, effort, episode, state.turn + 1)
         prompt = game.render(state)
-        resp, err = _call(model, prompt, effort, call_timeout, retries)
+        resp, err = _call(model, prompt, effort, call_timeout, retries, writer)
         if resp is None:
             # 호출 실패: 무효 턴으로 기록하고 에피소드 종료
             state.turn += 1
@@ -263,11 +313,13 @@ def _play_episode(game, model: str, effort: str, episode: int, seed: int,
             event = {"type": "turn", "episode": episode, "turn": state.turn,
                      "valid": False, "error": err, "best_rank": best,
                      "raw": "", "ts": _now()}
+            writer.finish()             # 실패 턴도 done=true로 마감
         else:
             action = game.parse(resp.text)
             step_event = game.step(state, action)
             best = _best_rank(state)
             event = _turn_event(episode, step_event, best)
+            writer.finish(resp.text)    # 전문 + done=true
         _append_jsonl(events_path, event)
         _write_json_atomic(live_path, _live(
             model, effort, episode, state.turn, max_turns, "running", event, best))
@@ -297,6 +349,7 @@ def _run_participant(game, participant: dict, run_dir: Path, seeds: list[int],
     mdir.mkdir(parents=True, exist_ok=True)
     events_path = mdir / "events.jsonl"
     live_path = mdir / "live.json"
+    stream_path = mdir / "stream.json"
 
     episode_ends: list[dict] = []
     invalid_total = 0
@@ -304,7 +357,7 @@ def _run_participant(game, participant: dict, run_dir: Path, seeds: list[int],
         episode = i + 1  # 1-기반(계약: "episode":1)
         ep_end, invalids = _play_episode(
             game, model, effort, episode, seed, max_turns,
-            events_path, live_path, call_timeout, retries)
+            events_path, live_path, stream_path, call_timeout, retries)
         episode_ends.append(ep_end)
         invalid_total += invalids
 
