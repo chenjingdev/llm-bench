@@ -10,35 +10,38 @@ import json
 import math
 import urllib.request
 
-OLLAMA = "http://localhost:11434/api/embed"
+OLLAMA_BASE = "http://localhost:11434"
+OLLAMA = f"{OLLAMA_BASE}/api/embed"
 MODEL = "nomic-embed-text"
 # nomic-embed-text v1.5는 태스크 프리픽스 권장. 또래 항목 간 유사도/군집엔 clustering.
 _PREFIX = "clustering: "
 
-_cache: dict[str, list[float]] = {}
+# 캐시 키는 (model, text) — 모델별로 벡터가 다르므로 분리한다.
+_cache: dict[tuple[str, str], list[float]] = {}
 
 
 def available() -> bool:
     try:
-        urllib.request.urlopen("http://localhost:11434/api/tags", timeout=3)
+        urllib.request.urlopen(f"{OLLAMA_BASE}/api/tags", timeout=3)
         return True
     except Exception:
         return False
 
 
-def embed(texts: list[str], prefix: bool = True) -> list[list[float]]:
-    """텍스트 리스트 → 임베딩 벡터 리스트. 캐시 사용."""
+def embed(texts: list[str], prefix: bool = True, *, model: str = MODEL) -> list[list[float]]:
+    """텍스트 리스트 → 임베딩 벡터 리스트. (model, text) 단위 캐시."""
     out: list[list[float] | None] = [None] * len(texts)
     todo, todo_idx = [], []
     for i, t in enumerate(texts):
-        key = (_PREFIX if prefix else "") + t
+        text = (_PREFIX if prefix else "") + t
+        key = (model, text)
         if key in _cache:
             out[i] = _cache[key]
         else:
-            todo.append((_PREFIX if prefix else "") + t)
+            todo.append(text)
             todo_idx.append(i)
     if todo:
-        body = json.dumps({"model": MODEL, "input": todo}).encode()
+        body = json.dumps({"model": model, "input": todo}).encode()
         req = urllib.request.Request(OLLAMA, data=body,
                                      headers={"Content-Type": "application/json"})
         with urllib.request.urlopen(req, timeout=120) as r:
@@ -47,8 +50,32 @@ def embed(texts: list[str], prefix: bool = True) -> list[list[float]]:
         for j, idx in enumerate(todo_idx):
             v = embs[j]
             out[idx] = v
-            _cache[texts[idx] if not prefix else _PREFIX + texts[idx]] = v
+            _cache[(model, todo[j])] = v
     return out  # type: ignore
+
+
+def model_info(model: str = MODEL) -> dict:
+    """ollama /api/tags에서 모델의 {name, digest} 조회.
+
+    정확일치 우선, 없으면 접두일치. 조회 실패 시 {name: model, digest: "unknown"}.
+    """
+    try:
+        with urllib.request.urlopen(f"{OLLAMA_BASE}/api/tags", timeout=3) as r:
+            data = json.loads(r.read())
+    except Exception:
+        return {"name": model, "digest": "unknown"}
+    entries = data.get("models", []) if isinstance(data, dict) else []
+    # 정확일치
+    for entry in entries:
+        if entry.get("name") == model:
+            return {"name": entry.get("name", model),
+                    "digest": entry.get("digest", "unknown")}
+    # 접두일치(예: "qwen3-embedding" 요청 → "qwen3-embedding:4b" 태그)
+    for entry in entries:
+        name = entry.get("name", "")
+        if name.startswith(model):
+            return {"name": name, "digest": entry.get("digest", "unknown")}
+    return {"name": model, "digest": "unknown"}
 
 
 def cosine(a: list[float], b: list[float]) -> float:

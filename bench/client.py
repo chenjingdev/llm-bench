@@ -68,7 +68,7 @@ def call(
     if v == "codex":
         return _call_codex(model, prompt, effort, timeout)
     if v == "gemini":
-        return _call_gemini(model, prompt, timeout)
+        return _call_gemini(model, prompt, effort, timeout)
     cmd = _build_cmd(model, prompt, effort, system)
     t0 = time.time()
     try:
@@ -161,10 +161,16 @@ def _call_codex(model: str, prompt: str, effort: str, timeout: int) -> CallResul
 
 
 # ----------------------------------------------------------------------
-# 제미니 어댑터 — `agy -p` (effort는 모델 표시명에 내장)
+# 제미니 어댑터 — `agy -p` (effort는 표시명 접미사 "(Low/Medium/High)"로 선택)
 # ----------------------------------------------------------------------
-def _call_gemini(model: str, prompt: str, timeout: int) -> CallResult:
-    gmodel = config.GEMINI_MODELS[model]
+def _gemini_display(model: str, effort: str) -> str:
+    """agy 표시명 조합 — base + " (Effort)". agy models 표기와 정확히 일치."""
+    base = config.GEMINI_MODELS[model]["name"]
+    return f"{base} ({effort.capitalize()})"
+
+
+def _call_gemini(model: str, prompt: str, effort: str, timeout: int) -> CallResult:
+    gmodel = _gemini_display(model, effort)
     iso = config.ISO_DIR
     os.makedirs(iso, exist_ok=True)
     cmd = [config.AGY_BIN, "-p", prompt, "--model", gmodel]

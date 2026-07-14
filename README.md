@@ -60,6 +60,26 @@ python3 -m bench report --run results/raw/<run_id>   # 리포트 재생성
 - 호출 가능한 Opus 사다리: 4.0 · 4.1 · 4.5 · 4.6 · 4.7 · 4.8 (`--models`로 지정).
 - 새 축 추가 = `probes.py`에 probe + `axes/<name>.py`에 `score()` + 레지스트리 등록.
 
+## Mindmatch — 모델 동시 플레이 아레나
+
+여러 모델에게 같은 게임을 **한꺼번에** 시키고, 그 과정을 대시보드에서 실시간으로 지켜보는
+제품이다. 현재 게임은 꼬맨틀(`ko-semantle`, Qwen3 4B 로컬 임베딩 + 고정 기준 어휘) 하나.
+
+- 모든 모델이 에피소드별 **동일 seed(동일 정답)**를 받아 공정 비교. 대결 프레이밍 없음.
+- 매 턴 즉시 저장(중단 강건) + 대시보드 2초 갱신: 현재 추측·유사도·순위·모델 응답 원문
+  ("모델 공개 출력" — 비공개 chain-of-thought가 아님)이 진행 중에 바로 보인다.
+- 저장·조회 단위는 모델: `results/arena/<run_id>/models/<모델>/` (모델 카드 클릭 → 과거 런).
+- 채점은 LLM 심판 없이 고정 오라클로만. 완료 시 같은 오라클로 자동 재생 검증. 정답은
+  에피소드가 끝나기 전엔 파일에도 API에도 노출되지 않는다.
+
+```bash
+python3 -m bench arena serve --port 8777          # Mindmatch 대시보드
+python3 -m bench arena run --game ko-semantle \
+  --models claude-haiku-4-5 codex-5.6-luna \
+  --episodes 3 --effort low                        # 화면의 [새 플레이 시작]과 동일
+python3 -m bench arena verify results/arena/<run_id>
+```
+
 ## 다음 단계
 1. 8축 확정 (`01-design.md`의 열린 결정 — 하드:스타일 3:5 vs 4:4)
 2. 우선순위 축부터 채점기 확장(청중적응⑦이 "자폐 3증상"의 남은 하나)
