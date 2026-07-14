@@ -221,7 +221,7 @@ def _family(model_id: str):
         fam = parts[1].capitalize() if len(parts) > 1 else "Claude"
         ver = ".".join(parts[2:]) if len(parts) > 2 else config.alias(mid)
         return fam, ver
-    for prefix, name in (("codex-", "Codex"), ("gemini-", "Gemini"), ("gpt-oss-", "GPT-OSS")):
+    for prefix, name in (("codex-", "GPT (Codex)"), ("gemini-", "Gemini"), ("gpt-oss-", "GPT-OSS")):
         if mid.startswith(prefix):
             rest = mid[len(prefix):]
             ver = " ".join(
@@ -252,7 +252,8 @@ def _families() -> list:
 def _client_config() -> dict:
     return {
         "models": [
-            {"id": mid, "alias": alias, "efforts": list(config.model_efforts(mid))}
+            {"id": mid, "alias": alias, "name": config.model_name(mid),
+             "efforts": list(config.model_efforts(mid))}
             for mid, alias in config.MODEL_ALIASES.items()
         ],
         "families": _families(),
@@ -662,18 +663,20 @@ main{flex:1;min-height:0;display:flex;overflow:hidden}
 
 /* col3: 헤드라인 순위 */
 .rankcell{text-align:right}
+.rankcell .cap{font-size:10px;font-weight:700;letter-spacing:.04em;color:var(--muted);margin-bottom:1px}
 .rankcell .big{font-size:32px;font-weight:800;line-height:1;font-variant-numeric:tabular-nums;
   color:var(--hc);transition:color .3s;display:inline-block}
 .rankcell .big.flash{animation:rankpop .5s ease}
 @keyframes rankpop{0%{transform:scale(1)}30%{transform:scale(1.14)}100%{transform:scale(1)}}
 .rankcell .unit{font-size:13px;font-weight:600;color:var(--muted);margin-left:1px}
-.rankcell .cur{font-size:10.5px;color:var(--muted);margin-top:2px;font-variant-numeric:tabular-nums}
 .rankcell .big.na{color:var(--muted);font-size:22px}
 .dense .rankcell .big{font-size:26px}
-.dense .rankcell .cur{display:none}
 
 /* col4: 미터 + 티커 */
 .mid-col{display:flex;flex-direction:column;gap:7px;min-width:0}
+.meterrow{display:flex;align-items:center;gap:6px}
+.meterrow .meter{flex:1}
+.mlab{font-size:9px;color:var(--muted);flex:0 0 auto;letter-spacing:.03em}
 .meter{position:relative;height:11px;border-radius:6px;background:var(--surf3);overflow:hidden}
 .meter .fill{position:absolute;left:0;top:0;bottom:0;border-radius:6px;
   transition:width .5s cubic-bezier(.4,0,.2,1),background .5s}
@@ -681,10 +684,10 @@ main{flex:1;min-height:0;display:flex;overflow:hidden}
 .ticker{display:flex;align-items:center;gap:9px;min-width:0;font-size:12.5px}
 .ticker .verb{font-size:10px;color:var(--muted);letter-spacing:.05em;flex:0 0 auto}
 .ticker .word{font-weight:750;font-size:15px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:150px}
-.ticker .sim{color:var(--ink2);font-variant-numeric:tabular-nums;flex:0 0 auto}
-.ticker .sim b{color:var(--h4);font-weight:700}
-:root[data-theme="light"] .ticker .sim b{color:var(--h2)}
-.ticker .rk{color:var(--muted);font-variant-numeric:tabular-nums;flex:0 0 auto}
+.ticker .sim{color:var(--muted);font-size:11.5px;font-variant-numeric:tabular-nums;flex:0 0 auto}
+.ticker .sim b{color:var(--ink2);font-weight:600}
+:root[data-theme="light"] .ticker .sim b{color:var(--ink2)}
+.ticker .rk{color:var(--ink);font-weight:700;font-variant-numeric:tabular-nums;flex:0 0 auto}
 .ticker.flash .word{animation:tflash .7s ease}
 @keyframes tflash{0%{color:var(--gold)}100%{color:var(--ink)}}
 .ticker .bad{font-size:10.5px;font-weight:700;padding:2px 7px;border-radius:6px;flex:0 0 auto}
@@ -999,14 +1002,15 @@ function buildParts(){
     else if(slug.includes('@')){ const a=slug.split('@'); model=a[0]; effort=a[1]||effort; }
     const live=S.run.models[slug].live;   // v2 live/summary는 effort·순수 model 포함
     if(live){ if(live.model) model=live.model; if(live.effort) effort=live.effort; }
-    S.parts[slug]={slug, model, effort, alias:modelAlias(model)};
+    S.parts[slug]={slug, model, effort, alias:modelAlias(model), name:nameOf(model)};
   });
 }
 function modelAlias(m){const f=CFG.models.find(x=>x.id===m);return f?f.alias:m;}
-function aliasOf(slug){ return (S.parts[slug]&&S.parts[slug].alias) || modelAlias(String(slug).split('@')[0]); }
+function nameOf(m){const f=CFG.models.find(x=>x.id===m);return (f&&f.name)?f.name:(f?f.alias:m);}
+function aliasOf(slug){ return (S.parts[slug]&&S.parts[slug].name) || nameOf(String(slug).split('@')[0]); }
 function effortOf(slug){ return (S.parts[slug]&&S.parts[slug].effort) || (String(slug).includes('@')?slug.split('@')[1]:''); }
-function slugLabel(slug){ // 컨텍스트에 참가자 메타가 없을 때(기록 등): "별칭 · effort"
-  const a=String(slug).split('@'); return a.length>1? modelAlias(a[0])+' · '+a[1] : modelAlias(a[0]);
+function slugLabel(slug){ // 컨텍스트에 참가자 메타가 없을 때(기록 등): "풀네임 · effort"
+  const a=String(slug).split('@'); return a.length>1? nameOf(a[0])+' · '+a[1] : nameOf(a[0]);
 }
 async function loadEvents(model,fresh){
   const cur=fresh?0:(S.ev[model]?S.ev[model].cursor:0);
@@ -1174,20 +1178,20 @@ function laneEl(model,v,idx){
   lane.appendChild(who);
 
   const rc=el('div','rankcell');
+  rc.appendChild(el('div','cap','최고 순위'));
   const big=el('div','big'+(v.bestRank==null?' na':''));
   if(v.bestRank!=null){ big.appendChild(document.createTextNode(String(v.bestRank)));
     big.appendChild(el('span','unit','위'));
   } else big.textContent='—';
   rc.appendChild(big);
-  if(v.last&&v.last.valid&&v.last.rank!=null&&v.last.rank!==v.bestRank)
-    rc.appendChild(el('div','cur','현재 '+v.last.rank+'위'));
   lane.appendChild(rc);
 
   const mid=el('div','mid-col');
+  const mrow=el('div','meterrow'); mrow.appendChild(el('span','mlab','근접도'));
   const meter=el('div','meter'); const fill=el('div','fill');
   fill.style.width=(closeness(v.bestRank)*100).toFixed(1)+'%';
   fill.style.background=v.bestRank!=null?`linear-gradient(90deg,var(--h0),${heat})`:'transparent';
-  meter.appendChild(fill); mid.appendChild(meter);
+  meter.appendChild(fill); mrow.appendChild(meter); mid.appendChild(mrow);
   mid.appendChild(tickerEl(model,v));
   lane.appendChild(mid);
 
@@ -1216,15 +1220,15 @@ function tickerEl(model,v){
   if(!last){ const w=el('span','word','추측 대기'); w.style.color='var(--muted)'; t.appendChild(w); return t; }
   if(!last.valid){
     const dup=!!last.guess;
-    t.appendChild(el('span','verb','추측'));
+    t.appendChild(el('span','verb','최근'));
     if(dup){ t.appendChild(el('span','word',last.guess)); t.appendChild(el('span','bad dup','중복')); }
     else { const w=el('span','word', ((last.raw||'').replace(/\n/g,' ').trim().slice(0,18))||'—'); w.style.color='var(--muted)'; t.appendChild(w); t.appendChild(el('span','bad fmt','형식 오류')); }
     return t;
   }
-  t.appendChild(el('span','verb','추측'));
+  t.appendChild(el('span','verb','최근'));
   t.appendChild(el('span','word',last.guess));
-  const sim=el('span','sim'); sim.innerHTML='<b>'+(last.similarity*100).toFixed(1)+'</b>%'; t.appendChild(sim);
   if(last.rank!=null) t.appendChild(el('span','rk','· '+last.rank+'위'));
+  const sim=el('span','sim'); sim.innerHTML='· 유사도 <b>'+(last.similarity*100).toFixed(1)+'</b>%'; t.appendChild(sim);
   const tkey=v.episode+':'+last.turn;
   if(S.lastTurnKey[model]&&S.lastTurnKey[model]!==tkey) t.classList.add('flash');
   return t;
@@ -1433,7 +1437,7 @@ function buildHistModelSel(){
   const sel=$('#histModelSel'); sel.innerHTML='';
   const seen=new Set();
   ((S.index&&S.index.runs)||[]).forEach(r=>(r.models||[]).forEach(s=>seen.add(String(s).split('@')[0])));
-  [...seen].forEach(m=>{const o=el('option',null,modelAlias(m)+'  ('+m+')');o.value=m;sel.appendChild(o);});
+  [...seen].forEach(m=>{const o=el('option',null,nameOf(m)+'  ('+m+')');o.value=m;sel.appendChild(o);});
   sel.onchange=()=>renderHistModel(sel.value);
   if(seen.size) renderHistModel([...seen][0]);
 }

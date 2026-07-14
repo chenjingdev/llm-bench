@@ -385,12 +385,12 @@ def test_family_derivation():
     assert arena_web._family("claude-opus-4-8") == ("Opus", "4.8")
     assert arena_web._family("claude-haiku-4-5") == ("Haiku", "4.5")
     assert arena_web._family("claude-sonnet-5") == ("Sonnet", "5")
-    assert arena_web._family("codex-5.6-luna") == ("Codex", "5.6 Luna")
+    assert arena_web._family("codex-5.6-luna") == ("GPT (Codex)", "5.6 Luna")
     assert arena_web._family("gemini-3-pro") == ("Gemini", "3 Pro")
     # 카탈로그 확장분(codex/gemini/gpt-oss/fable)
-    assert arena_web._family("codex-5.6-sol") == ("Codex", "5.6 Sol")
-    assert arena_web._family("codex-5.4-mini") == ("Codex", "5.4 Mini")
-    assert arena_web._family("codex-5.6-terra") == ("Codex", "5.6 Terra")
+    assert arena_web._family("codex-5.6-sol") == ("GPT (Codex)", "5.6 Sol")
+    assert arena_web._family("codex-5.4-mini") == ("GPT (Codex)", "5.4 Mini")
+    assert arena_web._family("codex-5.6-terra") == ("GPT (Codex)", "5.6 Terra")
     assert arena_web._family("gemini-3.5-flash") == ("Gemini", "3.5 Flash")
     assert arena_web._family("gpt-oss-120b") == ("GPT-OSS", "120B")
     assert arena_web._family("claude-fable-5") == ("Fable", "5")
@@ -441,3 +441,18 @@ def test_validate_body_argv_shape():
     assert payload["slugs"] == ["claude-haiku-4-5@high"]
     assert "--effort" not in payload["argv"]
     assert "--models" in payload["argv"]
+
+
+def test_client_config_carries_full_name():
+    cfg = arena_web._client_config()
+    by_id = {m["id"]: m for m in cfg["models"]}
+    assert by_id["claude-opus-4-8"]["name"] == "Claude Opus 4.8"
+    assert by_id["codex-5.6-sol"]["name"] == "GPT-5.6 Sol"
+    assert by_id["gemini-3.5-flash"]["name"] == "Gemini 3.5 Flash"
+    assert by_id["gpt-oss-120b"]["name"] == "GPT-OSS 120B"
+
+
+def test_full_names_in_rendered_index():
+    html = arena_web._render_index()
+    assert "Claude Opus 4.8" in html
+    assert "GPT-5.6 Sol" in html

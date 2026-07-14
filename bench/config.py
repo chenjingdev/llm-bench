@@ -70,6 +70,35 @@ MODEL_ALIASES = {
     "gpt-oss-120b": "OSS 120B",
 }
 
+# 풀 표시명(관전 화면 레인·범례·표용) — 축약 별칭은 좁은 지면 전용으로 유지.
+# codex-*의 실제 모델은 GPT 계열이므로 표시명도 GPT로(라우팅명과 구분).
+MODEL_NAMES = {
+    "claude-opus-4-0": "Claude Opus 4.0",
+    "claude-opus-4-1": "Claude Opus 4.1",
+    "claude-opus-4-5": "Claude Opus 4.5",
+    "claude-opus-4-6": "Claude Opus 4.6",
+    "claude-opus-4-7": "Claude Opus 4.7",
+    "claude-opus-4-8": "Claude Opus 4.8",
+    "claude-haiku-4-5": "Claude Haiku 4.5",
+    "claude-sonnet-4-6": "Claude Sonnet 4.6",
+    "claude-sonnet-5": "Claude Sonnet 5",
+    "claude-fable-5": "Claude Fable 5",
+    "codex-5.5": "GPT-5.5",
+    "codex-5.4": "GPT-5.4",
+    "codex-5.6-luna": "GPT-5.6 Luna",
+    "codex-5.6-sol": "GPT-5.6 Sol",
+    "codex-5.6-terra": "GPT-5.6 Terra",
+    "codex-5.4-mini": "GPT-5.4 Mini",
+    "gemini-3-pro": "Gemini 3.1 Pro",
+    "gemini-3.5-flash": "Gemini 3.5 Flash",
+    "gpt-oss-120b": "GPT-OSS 120B",
+}
+
+
+def model_name(model: str) -> str:
+    return MODEL_NAMES.get(model, model)
+
+
 # --- Mindmatch 게임 파일럿 모델 -----------------------------------------
 # 꼬맨틀 스위트 기본 대상(R6): 저비용 클로드 + 코덱스 루나, effort low.
 GAME_PILOT_MODELS = ["claude-haiku-4-5", "codex-5.6-luna"]
