@@ -10,6 +10,7 @@ node_modules/
 
 # tool caches
 .playwright-mcp/
+.cache/
 
 # bench outputs / artifacts
 results/

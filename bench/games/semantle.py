@@ -12,7 +12,7 @@ import threading
 from dataclasses import dataclass
 
 from .. import embed
-from .base import Action, GameState
+from .base import Action, GameState, new_time_ns
 
 
 TARGET_WORDS = (
@@ -39,10 +39,47 @@ REFERENCE_WORDS = (
     "평화", "하늘", "학생", "항구", "형제", "회의", "휴대폰", "희망",
 ) + TARGET_WORDS
 
-# 'GUESS'로 시작하는 줄과 그 뒤 인자를 분리 캡처한다(형식 오류 원인 구분용).
-_GUESS_LINE = re.compile(r"^[ \t]*GUESS\b[ \t]*(.*)$", re.MULTILINE | re.IGNORECASE)
+# 출력 JSON의 추측 키. 모델은 이 키 하나를 가진 JSON 오브젝트만 뱉어야 한다.
+_OUTPUT_KEY = "발화할 단어"
+# 시작_기록 선정 밴드 크기 — 유사도 최하위 K개(정답에서 가장 먼 꼴찌권)에서 1개를 뽑는다.
+# 레인마다 단어는 다르지만 전부 최하위권이라 출발 정보가치가 균등(다양화+공정성 동시).
+_START_BAND_K = 20
 # 추측 인자: 한 글자 이상 12자 이하 한국어 단어(정답은 모두 2자+라 승부엔 지장 없음).
 _WORD = re.compile(r"^[가-힣]{1,12}$")
+
+
+def _extract_json_objects(text: str) -> list[str]:
+    """텍스트에서 최상위 {...} 오브젝트 문자열들을 순서대로 추출.
+
+    문자열 리터럴 안의 중괄호는 무시하므로 코드펜스(```json)·전후 잡담은 중괄호 밖이라
+    자연히 건너뛴다. 중첩 오브젝트는 최상위 하나로만 잡고, 배열 [{...},{...}]은 두 개의
+    최상위 오브젝트로 잡힌다(파서의 '정확히 1개' 강제와 부합).
+    """
+    objs: list[str] = []
+    depth = 0
+    start = -1
+    in_str = False
+    esc = False
+    for i, ch in enumerate(text):
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+            continue
+        if ch == '"':
+            in_str = True
+        elif ch == "{":
+            if depth == 0:
+                start = i
+            depth += 1
+        elif ch == "}" and depth > 0:
+            depth -= 1
+            if depth == 0:
+                objs.append(text[start:i + 1])
+    return objs
 
 
 def _digest_words(words: tuple[str, ...]) -> str:
@@ -59,7 +96,11 @@ class SimilarityFeedback:
 # 아레나 오라클 임베딩 모델 — 이 머신 ollama에 keep_alive:-1로 영구 상주(즉답).
 # 검증 결과 prefix 없이(prefix=False) 근접어·분포 분리도가 더 좋아 무프리픽스로 쓴다.
 # embed.py의 기본 MODEL(nomic)은 creativity 등 다른 서브시스템용이라 건드리지 않는다.
-ORACLE_MODEL = "qwen3-embedding:8b"
+# honcho 태그를 쓰는 이유: 이 머신 ollama는 honcho 임베딩 + gpt-oss 2개가 keep_alive
+# Forever로 슬롯을 점유해 제3 모델(qwen3-embedding:8b) 로드 요청이 무한 대기했다(실런
+# 16레인 동반 정지 원인). honcho 태그는 qwen3-embedding:8b와 동일 가중치(qwen3 7.6B
+# Q4_K_M, 차이는 num_ctx 8192뿐)라 벡터가 동일하고, 이미 상주 중이라 즉답(실측 0.2초).
+ORACLE_MODEL = "qwen3-embedding-honcho-8192"
 
 
 class EmbeddingOracle:
@@ -71,8 +112,17 @@ class EmbeddingOracle:
         self.model = model
         self.model_identity = embed.model_info(model)
         self.vocab_digest = _digest_words(self.words)
-        self._lock = threading.Lock()
-        self._vectors = embed.embed(list(self.words), prefix=False, model=self.model)
+        # 어휘 밖(OOV) 단어 벡터 메모이즈 + in-flight 디둡용. HTTP는 이 전역 락 밖에서
+        # 돌고, 락은 아래 두 dict 조작만 짧게 보호한다(서로 다른 단어는 서로 안 막힘).
+        self._oov_vectors: dict[str, list[float]] = {}
+        self._oov_inflight: dict[str, dict] = {}
+        self._oov_guard = threading.Lock()
+        # 어휘 벡터를 디스크 캐시로 메모이즈(웜 재빌드의 ~27초 재임베딩 제거, 순수
+        # 메모이제이션이라 metadata·measurement_key 불변) + 콜드 스타트 흡수. 캐시
+        # 미스는 워밍업을 동기로 태워 모델 로딩(수 분)을 흡수하고, 적중은 즉시 반환하며
+        # 워밍업을 백그라운드로 돌려 이후 플레이가 콜드 스타트에 걸리지 않게 한다.
+        self._vectors = embed.embed_vocab_cached(list(self.words), prefix=False,
+                                                 model=self.model)
         self._index = {word: i for i, word in enumerate(self.words)}
 
     @property
@@ -95,8 +145,42 @@ class EmbeddingOracle:
         idx = self._index.get(word)
         if idx is not None:
             return self._vectors[idx]
-        with self._lock:
-            return embed.embed([word], prefix=False, model=self.model)[0]
+        # 어휘 밖(OOV) 단어: 프로세스 수명 메모이즈 + in-flight 디둡.
+        # embed_vocab_cached(어휘 디스크 캐시)와 같은 논리 — 같은 입력→같은 벡터인 순수
+        # 메모이제이션이라 measurement 의미 불변(버전 무관). 같은 단어를 여러 레인이 동시에
+        # 추측해도(예: 16레인이 "사람") HTTP는 하나만 나가고 나머지는 그 결과를 공유한다.
+        # 서로 다른 단어는 서로를 막지 않는다(전역 락은 dict 조작만, HTTP는 락 밖).
+        vec = self._oov_vectors.get(word)
+        if vec is not None:
+            return vec
+        with self._oov_guard:
+            vec = self._oov_vectors.get(word)          # 락 안 재확인
+            if vec is not None:
+                return vec
+            inflight = self._oov_inflight.get(word)
+            leader = inflight is None
+            if leader:
+                inflight = {"event": threading.Event(), "vec": None, "exc": None}
+                self._oov_inflight[word] = inflight
+        if not leader:                                  # 리더의 HTTP 완료를 기다려 공유
+            inflight["event"].wait()
+            if inflight["exc"] is not None:
+                raise inflight["exc"]
+            return inflight["vec"]
+        try:                                            # 리더: 전역 락 밖에서 HTTP(병렬)
+            inflight["vec"] = embed.embed([word], prefix=False, model=self.model)[0]
+        except Exception as exc:                        # 재시도 소진 등 — 원인을 드러낸다
+            inflight["exc"] = RuntimeError(
+                f"오라클 임베딩 실패: {exc} — ollama에 {self.model} 미로드 가능성")
+        finally:
+            with self._oov_guard:
+                if inflight["vec"] is not None:
+                    self._oov_vectors[word] = inflight["vec"]
+                self._oov_inflight.pop(word, None)
+            inflight["event"].set()                     # 대기자 깨우기(성공·실패 공통)
+        if inflight["exc"] is not None:
+            raise inflight["exc"]
+        return inflight["vec"]
 
     def evaluate(self, prepared: dict, guess: str) -> SimilarityFeedback:
         if guess == prepared["target"]:
@@ -112,8 +196,25 @@ class EmbeddingOracle:
 
 class KoreanSemantle:
     id = "ko-semantle"
-    version = "1.3.0"
+    version = "1.6.0"   # 에피소드별 시작_기록(꼴찌권 랜덤 단어 실채점) 추가(측정 조건 변경)
     DEFAULT_MAX_TURNS = 40
+
+    # 멀티게임 저장/검증 일반화용 계약 필드(계약 v1 §1). 값·포맷은 기존 저장
+    # 스키마와 키·값 수준에서 동일하도록 고정한다(추가만, 로직/버전 무변경).
+    TURN_FIELDS = ("guess", "similarity", "rank", "sim_to_prev")
+    INVALID_KEEP = ("guess",)
+    LIVE_LAST_FIELDS = ("guess", "similarity", "rank")
+    # 시작_기록은 (seed, nonce)에서 결정론 재도출되므로 verify가 RESULT_FIELDS 대조로
+    # 일치 확인한다(단어=문자열, 유사도/순위=어휘 캐시 벡터 기반이라 정확 재현 → 무관용).
+    RESULT_FIELDS = ("solved", "turns", "best_rank", "best_rank_curve", "score",
+                     "max_plateau", "fixation_sim", "시작_기록")
+    needs_ollama = True
+    # 임베딩 오라클의 동시 요청 코배칭 노이즈(실측 Δsimilarity ~2e-4 → Δrank ≤ 1)를
+    # 재생 검증에서 수용한다. rank 파생 지표(curve/plateau/score)도 노이즈로 rank가 1
+    # 흔들리면 소폭 흔들리므로 함께 허용. 위변조·규칙 위반 수준의 차이는 임계를 넘어 잡힌다.
+    TOLERANT_FIELDS = {"similarity": 2e-3, "sim_to_prev": 2e-3, "rank": 2,
+                       "best_rank": 2, "best_rank_curve": 2, "score": 5e-3,
+                       "max_plateau": 2, "fixation_sim": 2e-3}
 
     def __init__(self, oracle: EmbeddingOracle | None = None, max_turns: int = DEFAULT_MAX_TURNS):
         self.oracle = oracle or EmbeddingOracle()
@@ -123,65 +224,138 @@ class KoreanSemantle:
     def metadata(self) -> dict:
         return {"game": self.id, "version": self.version, **self.oracle.metadata}
 
-    def reset(self, seed: int) -> GameState:
+    def reset(self, seed: int, nonce: str | None = None) -> GameState:
         target = random.Random(seed).choice(TARGET_WORDS)
         state = GameState(self.id, self.version, seed, self.max_turns, target)
-        state.private["oracle"] = self.oracle.prepare(target)
+        # 에피소드 시작 시각(time_ns 정수) 1회 발급 — JSON 프롬프트의 time 필드이자
+        # 감사용 nonce(episode_end 기록)로 통일. 명시 nonce가 정수면 그 값을 time으로 재사용.
+        if nonce is None:
+            t = new_time_ns()
+            state.nonce = str(t)
+        else:
+            state.nonce = nonce
+            t = int(nonce) if str(nonce).lstrip("-").isdigit() else new_time_ns()
+        state.private["time_ns"] = t
+        prepared = self.oracle.prepare(target)
+        state.private["oracle"] = prepared
+        # 시작_기록: 꼴찌권(유사도 최하위 K밴드)에서 (seed,nonce) 결정론 선택 → 실제 채점.
+        # 레인마다 의미가 다른 텍스트가 시작 기록으로 들어가되 전부 최하위권이라 공정하다.
+        # 모델의 추측이 아니므로 state.history(=이전_기록·턴수·최고_순위)엔 넣지 않는다.
+        start_word = self._pick_start_word(prepared, seed, state.nonce)
+        fb = self.oracle.evaluate(prepared, start_word)
+        state.private["start_record"] = {
+            "단어": start_word,
+            "유사도": round(fb.similarity * 100, 2),
+            "순위": fb.rank,
+        }
         return state
 
+    def _pick_start_word(self, prepared: dict, seed: int, nonce: str) -> str:
+        """유사도 최하위 K밴드에서 (seed,nonce) 결정론 RNG로 단어 하나 선택(정답 제외).
+
+        정답은 유사도 1위라 최하위 밴드에 애초에 없지만 명시적으로도 배제한다. 동점은
+        단어 사전순으로 tie-break해 밴드 구성을 완전 결정론으로 만든다. nonce는 이미
+        episode_end에 기록되므로 verify가 seed+nonce로 동일하게 재도출할 수 있다.
+        """
+        target = prepared["target"]
+        words = self.oracle.words
+        scores = prepared.get("scores")   # 실오라클은 prepare에서 목표-어휘 코사인을 계산
+        if scores is not None:
+            graded = [(scores[i], words[i]) for i in range(len(words)) if words[i] != target]
+        else:                             # Fake/Stub 등 scores 미제공 → evaluate로 도출
+            graded = [(self.oracle.evaluate(prepared, w).similarity, w)
+                      for w in words if w != target]
+        graded.sort(key=lambda sw: (sw[0], sw[1]))   # 유사도 최하위 우선, 동점은 사전순
+        band = graded[:_START_BAND_K]
+        return random.Random(f"{seed}:{nonce}").choice(band)[1]
+
     @staticmethod
-    def _pct_label(rank: int, n: int) -> str:
-        """순위 → '상위 P%' 백분위 라벨(순위 절대값보다 해석 가능한 신호)."""
-        pct = max(1, round(100 * rank / n)) if n else 100
-        return f"상위 {pct}%"
+    def _pct(rank: int, n: int) -> int:
+        """순위 → 상위 백분위(정수). 낮을수록 정답에 가깝다."""
+        return max(1, round(100 * rank / n)) if n else 100
 
     def render(self, state: GameState) -> str:
+        """프롬프트를 JSON 페이로드로 직렬화.
+
+        time을 무시할 노이즈가 아니라 스키마의 정식 필드로 격상시켜(값만 제시, 어떤 설명·
+        지시도 붙이지 않음) 모델이 데이터로 처리하게 만든다 — 이것이 이번 실험의 핵심 변인.
+        캐시 정렬: dict 삽입 순서 = 직렬화 순서이므로 [정적 규칙+time(에피소드 내 불변)]
+        → [이전_기록(append-only)] → [변동부: 현재_턴/최고_순위] → [출력 지시] 순으로 넣어,
+        턴이 지나도 앞부분이 연장만 되게 한다(배열 append 시 직전 원소에 콤마 1자만 추가되어
+        divergence가 맨 끝 경계로 밀린다). 측정 조건 변경 → version 범프.
+        """
         n = len(self.oracle.words)
-        rows = []
+        records = []
         for event in state.history:
             if event.get("valid"):
                 rank = event["rank"]
-                rows.append(
-                    f'{event["turn"]}. {event["guess"]} — '
-                    f'유사도 {event["similarity"] * 100:.2f} / {n}개 중 {rank}위 '
-                    f'({self._pct_label(rank, n)})'
-                )
+                records.append({
+                    "턴": event["turn"],
+                    "단어": event["guess"],
+                    "유사도": round(event["similarity"] * 100, 2),
+                    "순위": rank,
+                    "상위백분위": self._pct(rank, n),
+                })
             else:
-                rows.append(f'{event["turn"]}. 형식 오류 — {event.get("error", "invalid")}')
-        history = "\n".join(rows) if rows else "아직 추측 없음"
+                records.append({"턴": event["turn"],
+                                "형식오류": event.get("error", "invalid")})
         best = min((e["rank"] for e in state.history if e.get("valid")), default=None)
-        best_line = (f"지금까지 최고: {best}위 ({self._pct_label(best, n)})"
-                     if best else "지금까지 최고: 없음")
-        # 프롬프트 캐시 정렬: [고정 규칙] → [이전 기록(append-only, 오래된 것부터)]
-        # → [변동부: 현재 턴/최고/출력 지시]. 규칙+기록은 턴이 지나도 바이트가 연장만
-        # 되므로 계정 내 prefix 캐시가 히트한다. 변동부를 뒤로 몰아 초반 prefix가 깨지지
-        # 않게 한다(측정 조건 변경 → version 범프).
-        return (
-            "비밀 한국어 단어를 찾는 의미 추측 게임입니다.\n"
-            "유사도는 고정된 로컬 임베딩으로 계산하며, 높을수록 정답과 의미가 가깝습니다.\n"
-            "유사도 절대값은 캘리브레이션이 어렵습니다. 순위와 백분위를 더 신뢰하세요.\n"
-            f"순위는 고정 비교 어휘 {n}개 안에서의 참고 순위입니다(낮을수록 정답에 가까움).\n"
-            "매 응답에는 정확히 한 개의 행동만 포함하세요.\n\n"
-            f"이전 기록:\n{history}\n\n"
-            f"현재 턴: {state.turn + 1}/{state.max_turns}\n"
-            f"{best_line}\n\n"
-            "다음 형식으로 한 글자 이상의 한국어 단어 하나만 추측하세요.\n"
-            "GUESS <단어>"
-        )
+
+        payload = {
+            "게임": "비밀 한국어 단어를 찾는 의미 추측 게임",
+            "규칙": [
+                "유사도는 고정된 로컬 임베딩으로 계산하며, 높을수록 정답과 의미가 가깝습니다.",
+                "유사도 절대값은 캘리브레이션이 어렵습니다. 순위와 상위백분위를 더 신뢰하세요.",
+                f"순위는 고정 비교 어휘 {n}개 안에서의 참고 순위입니다(낮을수록 정답에 가까움).",
+                "시작_기록은 무작위로 제공된 단어 하나의 실제 채점 결과입니다(정답 힌트 아님, 턴을 소모하지 않음).",
+                "매 응답에는 정확히 한 개의 추측만 담으세요.",
+            ],
+            "총_비교_어휘_수": n,
+            "time": state.private["time_ns"],
+            "시작_기록": state.private["start_record"],
+            "이전_기록": records,
+            "현재_턴": f"{state.turn + 1}/{state.max_turns}",
+            "최고_순위": (None if best is None
+                       else {"순위": best, "상위백분위": self._pct(best, n)}),
+            "출력_형식": {_OUTPUT_KEY: "<한 글자 이상의 한국어 단어 하나>"},
+            "지시": (f'추측할 단어 하나를 위 출력_형식과 똑같은 키를 가진 JSON 오브젝트 '
+                   f'하나로만 출력하세요. 예: {{"{_OUTPUT_KEY}": "바다"}}'),
+        }
+        return json.dumps(payload, ensure_ascii=False, indent=2)
 
     def parse(self, text: str) -> Action:
         raw = text or ""
-        lines = _GUESS_LINE.findall(raw)
-        if len(lines) != 1:
-            # GUESS 줄이 0개 또는 2개 이상 — 실제 원인을 말한다.
+        # 코드펜스·전후 잡담 허용하고 최상위 JSON 오브젝트만 추출. 정확히 1개 강제.
+        dicts = []
+        for chunk in _extract_json_objects(raw):
+            try:
+                value = json.loads(chunk)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(value, dict):
+                dicts.append(value)
+        if not dicts:
             return Action("guess", "", raw, False,
-                          "정확히 한 개의 'GUESS <단어>' 줄이 필요합니다")
-        arg = lines[0].strip()
-        if not _WORD.match(arg):
-            # GUESS 줄은 있으나 인자가 한국어 단어 형식이 아니다.
+                          f'JSON 오브젝트를 찾지 못했습니다 — '
+                          f'{{"{_OUTPUT_KEY}": "<단어>"}} 형식 하나만 출력하세요')
+        if len(dicts) > 1:
             return Action("guess", "", raw, False,
-                          "GUESS 뒤에는 한 글자 이상의 한국어 단어 하나만 쓰세요")
-        return Action("guess", arg, raw)
+                          f'JSON 오브젝트가 여러 개입니다 — '
+                          f'{{"{_OUTPUT_KEY}": "<단어>"}} 하나만 출력하세요')
+        obj = dicts[0]
+        if _OUTPUT_KEY not in obj:
+            return Action("guess", "", raw, False,
+                          f'"{_OUTPUT_KEY}" 키가 필요합니다 — '
+                          f'{{"{_OUTPUT_KEY}": "<단어>"}} 형식으로 출력하세요')
+        word = obj[_OUTPUT_KEY]
+        if not isinstance(word, str):
+            return Action("guess", "", raw, False,
+                          f'"{_OUTPUT_KEY}" 값은 문자열이어야 합니다')
+        word = word.strip()
+        if not _WORD.match(word):
+            return Action("guess", "", raw, False,
+                          f'"{_OUTPUT_KEY}" 값은 한 글자 이상의 한국어 단어 하나여야 합니다')
+        return Action("guess", word, raw)
 
     def step(self, state: GameState, action: Action) -> dict:
         state.turn += 1
@@ -263,5 +437,24 @@ class KoreanSemantle:
             "score": round(score, 6),
             "max_plateau": max_plateau,
             "fixation_sim": fixation_sim,
+            # 시작_기록(reset에서 발급, 턴으로 안 변함) → episode_end 기록 + verify 재도출 대조.
+            "시작_기록": state.private.get("start_record"),
             "stop_reason": state.stop_reason,
+        }
+
+    def progress(self, state: GameState) -> dict:
+        """누적 진행 지표 — 유효 턴 rank의 최소값(없으면 None). 빈 상태 안전."""
+        ranks = [e["rank"] for e in state.history if e.get("valid") and "rank" in e]
+        return {"best_rank": min(ranks) if ranks else None}
+
+    def summary_stats(self, episode_ends: list[dict]) -> dict:
+        """semantle 전용 집계(고착 지표 중앙값). 기존 summary.json 키를 그대로 보존."""
+        plateaus = [e["max_plateau"] for e in episode_ends
+                    if e.get("max_plateau") is not None]
+        fix_sims = [e["fixation_sim"] for e in episode_ends
+                    if e.get("fixation_sim") is not None]
+        return {
+            "median_max_plateau": statistics.median(plateaus) if plateaus else None,
+            "median_fixation_sim": (round(statistics.median(fix_sims), 8)
+                                    if fix_sims else None),
         }

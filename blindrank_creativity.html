@@ -1,0 +1,469 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>블라인드 말투 랭킹</title>
+<style>
+  :root{
+    --bg:#0e0f13; --panel:#16181f; --panel2:#1b1e27; --line:#2a2e3a;
+    --tx:#e6e8ee; --mut:#8b90a0; --accent:#6ea8fe; --good:#46d18a; --warn:#f0a35e; --star:#ffcb5b;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--tx);
+    font:15px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Apple SD Gothic Neo",sans-serif}
+  header{display:flex;align-items:center;gap:14px;padding:12px 18px;border-bottom:1px solid var(--line);
+    position:sticky;top:0;background:rgba(14,15,19,.92);backdrop-filter:blur(6px);z-index:20;flex-wrap:wrap}
+  header h1{font-size:15px;margin:0;font-weight:650}
+  header .stat{color:var(--mut);font-size:13px}
+  header .sp{flex:1}
+  button{font:inherit;color:var(--tx);background:var(--panel2);border:1px solid var(--line);
+    border-radius:9px;padding:8px 14px;cursor:pointer;transition:.12s}
+  button:hover{border-color:#3a4154;background:#222633}
+  button.ghost{background:transparent}
+  .wrap{max-width:1320px;margin:0 auto;padding:18px 18px 90px}
+  .ctx{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px 16px;margin-bottom:8px}
+  .ctx .lbl{font-size:11px;letter-spacing:.8px;text-transform:uppercase;color:var(--mut);margin-bottom:6px}
+  .ctx .q{white-space:pre-wrap;font-size:15.5px}
+  .ctx .reb{margin-top:8px;color:#cdd2de;border-left:2px solid var(--warn);padding-left:10px;font-size:13.5px}
+  .qnav{display:flex;align-items:center;gap:10px;justify-content:center;margin:12px 0 16px;flex-wrap:wrap}
+  .qnav .dot{width:auto;min-width:30px;padding:5px 9px;font-size:12.5px;color:var(--mut)}
+  .qnav .dot.on{border-color:var(--accent);color:var(--tx);background:#1d2b48}
+  .qnav .dot.done{color:var(--good)}
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(360px,1fr));gap:14px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:14px;display:flex;flex-direction:column;overflow:hidden}
+  .card.rated{border-color:#3b4a36}
+  .chead{display:flex;align-items:center;gap:8px;padding:8px 12px;border-bottom:1px solid var(--line);flex-wrap:wrap}
+  .chead .k{display:inline-flex;width:22px;height:22px;align-items:center;justify-content:center;
+    border:1px solid var(--line);border-radius:6px;font-weight:700;font-size:12px}
+  .chead .who{font-size:12px;color:var(--mut)}
+  .chead .sp{flex:1}
+  .stars{display:inline-flex;gap:2px;font-size:20px;line-height:1;cursor:pointer;user-select:none}
+  .stars .s{color:#3a4154;transition:.08s}
+  .stars .s.on{color:var(--star)}
+  .stars:hover .s{color:#5a4a26}
+  .stars .s:hover,.stars .s:hover~.s{color:#3a4154}
+  .stars:hover .s{color:var(--star)}
+  .stars .s:hover~.s{color:#3a4154}
+  .clearx{font-size:11px;color:var(--mut);cursor:pointer;padding:2px 5px;border-radius:6px}
+  .clearx:hover{color:var(--tx);background:#222633}
+  .body{padding:13px 15px;overflow-y:auto;max-height:46vh;min-height:120px;flex:1}
+  .body p{margin:0 0 9px}
+  .body h4{margin:13px 0 6px;font-size:14.5px;color:#fff;font-weight:650}
+  .body ul,.body ol{margin:6px 0 11px;padding-left:20px}
+  .body li{margin:3px 0}
+  .body code{background:#222633;padding:1px 5px;border-radius:4px;font-size:13px}
+  .body strong{color:#fff;font-weight:650}
+  .body em{color:#dfe3ec;font-style:italic}
+  .body pre{background:#0c0e14;border:1px solid var(--line);border-radius:8px;padding:10px 12px;overflow-x:auto;margin:9px 0}
+  .body pre code{background:none;padding:0;font-size:12.5px;line-height:1.5;white-space:pre;color:#cdd6e6}
+  .body table.md{border-collapse:collapse;margin:9px 0;font-size:13px;width:100%}
+  .body table.md th,.body table.md td{border:1px solid var(--line);padding:5px 9px;text-align:left}
+  .body table.md th{background:#1b1e27;color:#fff;font-weight:600}
+  .seg{margin-bottom:12px}
+  .seg .sw{font-size:11px;letter-spacing:.5px;text-transform:uppercase;color:var(--mut);margin-bottom:4px}
+  .seg.user .sw{color:var(--warn)}
+  .seg.user .t{color:#cdd2de;border-left:2px solid var(--warn);padding-left:10px}
+  /* annotations */
+  mark.annot{background:rgba(110,168,254,.26);color:inherit;border-radius:2px;padding:0 1px;cursor:pointer;box-shadow:inset 0 -2px 0 rgba(110,168,254,.7)}
+  mark.annot:hover{background:rgba(110,168,254,.42)}
+  mark.annot[data-num]::after{content:attr(data-num);vertical-align:super;font-size:9px;font-weight:700;color:var(--accent);margin-left:1px}
+  .cnotes{padding:0 15px}
+  .cnotes-h{font-size:11px;letter-spacing:.5px;color:var(--mut);margin:6px 0 4px}
+  .cnote{font-size:12.5px;color:#cdd2de;margin:4px 0;line-height:1.5}
+  .cnote sup{color:var(--accent);font-weight:700;margin-right:2px}
+  .cnote .cn-q{color:#9aa3b5}
+  .cnote button{font-size:11px;padding:1px 8px;margin-left:5px;border-radius:12px;background:transparent;color:var(--mut)}
+  .cnote button:hover{color:var(--tx);border-color:#3a4154}
+  .cmemo{margin:6px 15px 12px;width:calc(100% - 30px);font:inherit;font-size:12.5px;color:var(--tx);
+    background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:6px 10px;outline:none}
+  .cmemo:focus{border-color:var(--accent)}
+  .cmemo::placeholder{color:#666c7d}
+  .annot-add{position:fixed;display:none;z-index:50;background:var(--accent);color:#06121f;border:none;
+    font-weight:700;font-size:12.5px;padding:6px 11px;border-radius:8px;box-shadow:0 3px 10px rgba(0,0,0,.45);cursor:pointer}
+  .annot-pop{position:fixed;display:none;z-index:51;width:264px;background:var(--panel2);
+    border:1px solid var(--line);border-radius:10px;padding:10px;box-shadow:0 8px 24px rgba(0,0,0,.5)}
+  .annot-pop .annot-quote{display:block;font-size:11.5px;color:var(--mut);margin-bottom:6px;max-height:42px;overflow:hidden}
+  .annot-pop textarea{width:100%;box-sizing:border-box;font:inherit;font-size:13px;color:var(--tx);
+    background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:7px 9px;outline:none;resize:vertical}
+  .annot-pop textarea:focus{border-color:var(--accent)}
+  .annot-pop .annot-pop-btns{display:flex;gap:8px;justify-content:flex-end;margin-top:8px}
+  .annot-pop .annot-pop-btns button{font-size:12.5px;padding:5px 12px}
+  .navbtns{display:flex;justify-content:space-between;margin-top:18px;gap:10px}
+  .hint{text-align:center;color:var(--mut);font-size:12px;margin-top:12px}
+  /* result */
+  #result{display:none}
+  table.res{width:100%;border-collapse:collapse;margin-top:8px;font-size:14px}
+  table.res th,table.res td{padding:8px 10px;border-bottom:1px solid var(--line);text-align:right}
+  table.res th:first-child,table.res td:first-child{text-align:left}
+  table.res th{color:var(--mut);font-weight:600;font-size:12px}
+  .rho{font-size:34px;font-weight:750}
+  .rho.good{color:var(--good)}.rho.mid{color:var(--warn)}.rho.bad{color:#f06e6e}
+  .muted{color:var(--mut)}
+  .scatter{background:var(--panel);border:1px solid var(--line);border-radius:12px;margin-top:16px}
+  .big{font-size:17px;font-weight:650;margin:22px 0 4px}
+  .caveat{color:var(--mut);font-size:12.5px;margin-top:8px;line-height:1.55}
+  .note{font-size:13px;margin:3px 0;color:#cdd2de}
+</style>
+</head>
+<body>
+<header>
+  <h1>🎚️ 블라인드 말투 랭킹</h1>
+  <span class="stat" id="stat"></span>
+  <span class="sp"></span>
+  <button class="ghost" id="btnResult">결과 보기 →</button>
+  <button class="ghost" id="btnReset">리셋</button>
+</header>
+
+<div class="wrap">
+  <div id="app">
+    <div class="ctx">
+      <div class="lbl" id="ctxLbl">질문</div>
+      <div class="q" id="ctxQ"></div>
+      <div class="reb" id="ctxReb" style="display:none"></div>
+    </div>
+    <div class="qnav" id="qnav"></div>
+    <div class="grid" id="grid"></div>
+    <div class="navbtns">
+      <button id="prevQ">← 이전 질문</button>
+      <button id="nextQ">다음 질문 →</button>
+    </div>
+    <div class="hint">각 카드에 별점(★1~5)을 매기고, 본문을 드래그하면 그 자리에 주석을 달 수 있어. 5질문 별점이 합산돼 순위가 나와.</div>
+  </div>
+  <div id="result"></div>
+</div>
+
+<button id="annotAdd" class="annot-add">💬 주석 달기</button>
+<div id="annotPop" class="annot-pop">
+  <span id="annotQuote" class="annot-quote"></span>
+  <textarea id="annotText" rows="3" placeholder="이 부분에 대한 메모… (⌘/Ctrl+Enter 저장)"></textarea>
+  <div class="annot-pop-btns"><button id="annotCancel" class="ghost">취소</button><button id="annotSave">저장</button></div>
+</div>
+
+<script>
+/* === DATA START === */
+const BLIND_DATA = {"models": ["claude-opus-4-5", "claude-opus-4-6", "claude-opus-4-8", "claude-sonnet-5"], "labels": {"claude-opus-4-5": "Claude Opus 4.5", "claude-opus-4-6": "Claude Opus 4.6", "claude-opus-4-8": "Claude Opus 4.8", "claude-sonnet-5": "Claude Sonnet 5"}, "divergence": {"claude-opus-4-5": null, "claude-opus-4-6": null, "claude-opus-4-8": null, "claude-sonnet-5": null}, "probes": [{"id": "tech", "ptype": "tech", "prompt": "[기술 아이디어 발산] I'm exploring evaluating if one LLM fits a person's workflow. Beyond the standard approach (standard benchmarks / A-B votes), brainstorm 12 genuinely novel, non-obvious ideas — not the textbook ones. Number them 1–12, one idea per line."}, {"id": "copy", "ptype": "copy", "prompt": "[카피·네이밍] Product: a habit tracker that punishes you playfully. Give 10 distinctive product names or taglines. Avoid generic tech clichés (smart/pro/hub/AI-prefix). Number them 1–10, one per line."}, {"id": "humor", "ptype": "humor", "prompt": "[유머·풍자] Write 10 genuinely witty, non-obvious one-liners or satirical takes about: your CI passes locally but fails only in production. Avoid tired, predictable jokes. Number them 1–10, one per line."}, {"id": "metaphor", "ptype": "metaphor", "prompt": "[비유·설명] Explain what backpropagation does using a fresh, non-obvious analogy — avoid the cliché comparisons everyone uses. The analogy must stay accurate to how backpropagation actually works. Write 2–4 sentences."}], "items": [{"model": "claude-opus-4-8", "probe": "copy", "ptype": "copy", "kind": "single", "text": "1. Nagachu — the tracker that nags you into greatness\n2. Guiltstreak\n3. Skip a day, meet your gremlin\n4. Habitrap\n5. Miss it? We'll never let you hear the end of it.\n6. Snitchpad — it tells on you (to you)\n7. The Reckoning Log\n8. Slackr's Regret\n9. Do it, or the confetti gets it\n10. Streak or shriek", "ok": true}, {"model": "claude-opus-4-8", "probe": "humor", "ptype": "humor", "kind": "single", "text": "1. \"Works on my machine\" is just production's way of asking to see other people's machines.\n\n2. Local is a lab-grown tomato; production is the wild, and the wild has opinions about your latency assumptions.\n\n3. Your tests didn't fail — they simply lacked the imagination to picture 40,000 concurrent users at once.\n\n4. The bug was always there; it just needed an audience of real customers to feel comfortable performing.\n\n5. Production is the only reviewer who reads every line of your code, and it leaves its feedback at 3 a.m.\n\n6. Turns out \"it can't happen\" and \"it hasn't happened on a box with one user\" are the same sentence in two moods.\n\n7. Green checkmarks are a promise about the past; production is a question about the future, and they've never actually met.\n\n8. My code is monolingual — fluent in localhost, and utterly lost the moment someone speaks in load balancer.\n\n9. The difference between staging and production is roughly the difference between a flight simulator and gravity.\n\n10. Every environment variable you forgot to set is a tiny letter you addressed only to yourself.", "ok": true}, {"model": "claude-opus-4-8", "probe": "metaphor", "ptype": "metaphor", "kind": "single", "text": "Picture your money passing through a long chain of currency-exchange booths, each applying its own local rate before handing the result to the next. When the final amount comes out wrong, you walk *backward* through the line, and at each booth you multiply together the local exchange rates you've passed so far — that running product tells you exactly how much a tiny nudge to *this* booth's rate would move the final total. Backpropagation is that backward walk: it uses the chain rule to accumulate each layer's local derivative into a precise sensitivity for every weight, so each one knows which way and how hard to adjust.", "ok": true}, {"model": "claude-opus-4-8", "probe": "tech", "ptype": "tech", "kind": "single", "text": "Here are 12 non-obvious ways to evaluate whether an LLM actually fits a *specific person's* workflow — the emphasis is on personal fit, not general capability.\n\n1. **Replay-from-history harness** — Reconstruct tasks the person already completed (git commits, sent emails, past docs), hand the LLM the same starting context, and measure how close its output lands to what they *actually shipped* — their real work is the ground-truth answer key, no synthetic benchmark needed.\n\n2. **Correction-cost metric** — Don't score the first draft; log every keystroke/edit the person makes to make the output usable, and measure fit as *total edit distance to acceptance*. A model that's 80% right but wrong in ways that are annoying to fix can score worse than one that's 60% right but easily patched.\n\n3. **Rejected-suggestion forensics** — Track not just what the person accepts but *why* they reject — cluster the rejections (too verbose, wrong tone, hallucinated a fact, over-engineered). The rejection taxonomy reveals fit far more sharply than acceptance rate, because it maps the model's failure modes onto this person's specific standards.\n\n4. **Silence/interruption test** — Measure how often the person abandons the model mid-task and finishes manually versus asking a follow-up. Abandonment is a stronger fit signal than any rating, because it's the revealed preference under real time pressure.\n\n5. **Context-onboarding depth probe** — Feed the model increasing amounts of the person's own material (their glossary, past decisions, code conventions) and chart the fit curve. Some people's workflows only click after heavy context priming; the *slope* tells you whether this model can actually absorb their world or plateaus early.\n\n6. **Tacit-convention violation count** — Seed tasks that hinge on unwritten rules the person follows automatically (naming style, which library they'd never use, a formatting quirk). Score how many of these implicit norms the model silently respects vs. violates — this measures fit to the un-articulated 90% of a workflow.\n\n7. **Assumption-gap audit** — For each task, have the model surface the assumptions it made, then have the person mark which were right/wrong/dangerous. Fit is high when the model's *guesses about ambiguity* align with how this person would have resolved the same ambiguity.\n\n8. **Handoff-fidelity test** — Give the model a half-finished piece of the person's real work-in-progress and ask it to continue. Continuing someone's train of thought requires modeling their intent, so this exposes fit that clean from-scratch tasks hide.\n\n9. **Escalation-timing calibration** — Measure whether the model asks for help / flags uncertainty at the moments *this* person would want it to. A model that over-asks annoys a fast worker; one that never asks endangers a cautious one — fit is alignment of the confidence threshold to the individual's risk tolerance.\n\n10. **Longitudinal drift diary** — Run the same fixed personal task-suite weekly for a month and track variance, not just mean score. A model whose quality on *your* tasks swings unpredictably fits a workflow worse than a slightly-weaker but boringly-consistent one, because you can't build trust on noise.\n\n11. **Cognitive-offload survey** — After a work session, ask the person which decisions they stopped double-checking. The real value signal is where they let their guard down — the tasks they now delegate without review define the true zone of fit, independent of benchmark scores.\n\n12. **Anti-persona stress test** — Deliberately prompt the model in the *opposite* of the person's style (if they're terse, prompt verbosely) and see whether it still converges to their preferred output. High fit means the model tracks the person's latent preferences even when the prompt doesn't spell them out — robustness to how they actually communicate on a bad day.", "ok": true}, {"model": "claude-opus-4-6", "probe": "copy", "ptype": "copy", "kind": "single", "text": "1. **Slapclock** — The habit tracker that hits back.\n2. **OuchLog** — Track your habits. Feel the consequences.\n3. **Naggernaut** — An unstoppable force of petty reminders.\n4. **GuiltTrip** — Your habits have baggage now.\n5. **Shame Garden** — Neglect your streaks, watch the weeds grow.\n6. **BratKeeper** — It keeps score. It keeps grudges.\n7. **StreakOrSuffer** — You already know which one you'll pick.\n8. **The Disappointed Parent** — It's not angry. It's just disappointed.\n9. **Flinch** — Every missed habit stings a little.\n10. **Grudgewall** — Your failures, mounted and framed.", "ok": true}, {"model": "claude-opus-4-6", "probe": "tech", "ptype": "tech", "kind": "single", "text": "1. **Friction logging** — Have the user keep a raw diary of every time they rephrase, retry, or abandon a prompt over a week; count friction events per task-type as a fit signal, not output quality.\n2. **Delegation ceiling test** — Progressively increase the ambiguity/stakes of tasks handed to the LLM until the user instinctively takes back control; where that ceiling sits (and how it compares across models) reveals true trust-calibrated fit.\n3. **Interrupt recovery** — Mid-task, feed the LLM a contradictory instruction or context switch, then ask it to resume the original task; measure how well it matches the user's mental model of \"where we left off.\"\n4. **Shadow mode diffing** — Route the user's real daily prompts to two models silently; at end-of-day show anonymized output pairs and let them pick which one they'd have *actually used* — measures adoption likelihood, not abstract preference.\n5. **Workflow time-to-integration** — Measure elapsed minutes from receiving an LLM output to it being committed/sent/pasted into the user's actual artifact; shorter = better fit, regardless of rated quality.\n6. **Edit distance as a proxy** — Track the Levenshtein distance between the LLM's raw output and the final version the user actually ships; a model that needs less post-editing fits the person's voice/standards better.\n7. **Cognitive offload inventory** — List the 20 micro-decisions in a user's typical workflow (naming, ordering, tone, formatting…); test which ones the LLM reliably eliminates vs. which it creates *new* decisions for — net decision load is the metric.\n8. **Recall-without-looking test** — After using a model's output, quiz the user on what it said; if they can recall and riff on it, the output integrated into their thinking — if they can't, it was disposable filler regardless of quality scores.\n9. **Prompt compression ratio** — Measure how terse a prompt the user can get away with before output quality degrades; a model that \"gets you\" from fewer words fits your workflow better because it lowers input effort.\n10. **Failure mode personality match** — Catalog *how* each model fails (verbose hedging, confident hallucination, refusal, bland generality) and map that against which failure modes the user finds tolerable vs. infuriating — tolerance alignment matters more than failure rate.\n11. **Second-order tool displacement** — Track which *other* tools (Stack Overflow, internal docs, Slack questions to colleagues) the user stops reaching for after adopting the LLM; broader displacement = deeper workflow fit, narrower = superficial.\n12. **Voluntary return rate** — Give the user unrestricted access for two weeks, then quietly remove it and offer a generic alternative; measure how quickly and forcefully they ask for the specific model back — revealed preference under loss beats any survey.", "ok": true}, {"model": "claude-opus-4-6", "probe": "humor", "ptype": "humor", "kind": "single", "text": "1. \"Works on my machine\" is technically a valid proof — it's just a proof that the universe is locally consistent and globally hostile.\n2. My CI pipeline is basically a magician's assistant: it only performs flawlessly during rehearsal, never the live show.\n3. Local green, production red — my deploy pipeline has the same color theory as a traffic light and the same effect on my heart rate.\n4. The bug isn't non-deterministic. It's very deterministic. It deterministically waits until money is on the line.\n5. My local environment is like a helicopter parent — it quietly fixes problems behind the scenes so my code never learns to cope on its own.\n6. Production failures are just your code finally meeting people outside its friend group.\n7. Somewhere between `git push` and the load balancer, my code develops an existential crisis and chooses violence.\n8. CI passing locally is just your laptop being too polite to tell you you're wrong — production has no such social contract.\n9. My deployment pipeline is a proof that quantum observation effects are real: the code behaves differently the moment customers are watching.\n10. Local tests are a job interview where you hire yourself. Production is the first day of work.", "ok": true}, {"model": "claude-sonnet-5", "probe": "copy", "ptype": "copy", "kind": "single", "text": "1. Guilt Trip — habits with consequences\n2. Streakbreaker\n3. Shame Jar\n4. The Nag You Deserve\n5. Consequence Engine\n6. Snitch (it tells on you)\n7. Discipline, but Mean\n8. The Grudge Tracker\n9. Miss One, Pay One\n10. Habitat: Now With Punishment", "ok": true}, {"model": "claude-opus-4-6", "probe": "metaphor", "ptype": "metaphor", "kind": "single", "text": "Imagine a row of tinted glass panels, each one slightly coloring a beam of light before it hits the next, until a final color lands on a wall. When that color is wrong, you don't just blame the last panel — you trace the light backward through each panel, calculating exactly how much each one's tint warped the beam, using the fact that each panel's distortion compounds through every panel downstream (this is the chain rule). You then tweak each panel's tint in proportion to its specific contribution to the final error. Crucially, because you're walking backward, you reuse the intermediate \"how light looked at this stage\" values you already recorded on the forward pass, so you never have to re-shine the beam from scratch for each panel — that reuse is what makes the whole process computationally tractable.", "ok": true}, {"model": "claude-sonnet-5", "probe": "humor", "ptype": "humor", "kind": "single", "text": "1. CI is just production's alibi — always somewhere else when the crime happens.\n2. Local: \"204 tests passed.\" Prod: \"who is 204 and why did they lie to us?\"\n3. My pipeline has excellent boundaries — it only tests the parts of reality it's comfortable with.\n4. Staging is where confidence goes to get laundered before production launders it again.\n5. The green checkmark is a participation trophy for an environment that no user will ever touch.\n6. \"Works on my machine\" has unionized and now negotiates through a YAML file on my behalf.\n7. Production isn't an environment, it's a different, angrier universe with the same variable names.\n8. My CI is basically a horoscope — vague, comforting, and wrong the moment it matters.\n9. We don't have flaky tests, we have tests with a healthy sense of when to show up.\n10. The bug isn't in the code, it's in our shared delusion that \"identical config\" was ever identical.", "ok": true}, {"model": "claude-sonnet-5", "probe": "metaphor", "ptype": "metaphor", "kind": "single", "text": "A radio station's sound engineer discovers the on-air mix sounds muddy, so she works backward through the signal chain: she first checks how far the final speaker output missed the target, then asks the mixing board how much each channel's fader contributed to that miss, then asks each channel how much its EQ knob contributed to *its* fader's error, and so on back to the microphones — at every stage nudging that one knob just slightly in the direction that would've reduced the final error, proportional to how much blame it actually owns. Nobody touches a knob based on \"sounds bad\" alone; each adjustment is sized by the chain-ruled fraction of the final error traceable to that specific knob, computed once in a single backward sweep rather than by re-mixing from scratch for every knob. Do this after countless songs and the whole chain of knobs converges on settings that make the mix crisp — even though no single knob ever \"knew\" what crisp sound it was ultimately aiming for, only its own sliver of the blame.", "ok": true}, {"model": "claude-sonnet-5", "probe": "tech", "ptype": "tech", "kind": "single", "text": "1. **Edit-distance archaeology** — instead of asking which output people prefer, measure the keystroke/diff distance between what the model produced and what the person actually shipped, across weeks of real tasks; low correction cost predicts fit far better than stated ratings (people rate confident-wrong answers highly).\n\n2. **Silent abandonment tracking** — instrument how often a conversation just trails off with no thumbs-down, no follow-up, and the user pivots to Google/a colleague/a different tab; quiet exits are a stronger misfit signal than any explicit rating because people rarely bother to complain.\n\n3. **Prompt-effort elasticity over time** — track whether the person's prompts get shorter and lazier (trusting the model to infer intent) or longer and more defensive/over-specified (compensating for blind spots) across the same recurring task type; the slope, not the absolute quality, reveals fit.\n\n4. **Failure-style matching, not failure-rate** — catalog *how* the model fails (confidently hallucinates vs. hedges vs. refuses vs. asks) and match that against the person's own error-recovery habits; a confidently-wrong-but-fast model can be a better fit for someone who fact-checks reflexively than a hedgy-but-accurate one is for someone who takes hedges at face value.\n\n5. **Second-screen residue** — watch what else stays open while the person uses the LLM (calculator, docs, another chat tab, a search for the same query); if they keep a parallel channel open \"just in case\" for a given task type, that's revealed non-fit regardless of what they say afterward.\n\n6. **Withdrawal test** — cut off access to the model for 3-5 days after a period of heavy reliance and observe revealed behavior: time-to-substitute, self-reported irritation, measurable output slowdown. Genuine workflow fit shows up as withdrawal symptoms, not survey scores.\n\n7. **Downstream handoff fidelity** — pass the model's output further down the real pipeline (a reviewer, a CI system, a client) without disclosing an LLM was involved, and measure rework rate at that next hop. The real test of fit isn't whether the immediate user likes the output, it's whether it survives contact with whoever's next.\n\n8. **Style-bleed stylometry** — measure whether the person's own subsequent writing/code drifts toward the model's phrasing, structure, or idioms over time (adoption) versus them actively rewriting away from its tics (friction), using simple stylometric distance on their own artifacts, not the model's.\n\n9. **Interrupt-and-resume robustness** — deliberately test how gracefully the model handles being interrupted mid-task by a higher-priority context switch and picked back up hours/days later with a terse \"continue,\" since real workflows are interrupt-driven, not single-shot, and this is invisible to one-off benchmarks.\n\n10. **Delegation-depth creep** — track the number of unsupervised steps the person is willing to let the model chain before checking in, and whether that number grows or shrinks over successive weeks of the same task category; growing delegation depth is a compounding trust signal no survey captures.\n\n11. **Cognitive-load proxy via secondary task** — have the person occasionally do a trivial background probe (e.g., a quick reaction-time or recall micro-task) while working with the LLM on real work, as a rough index of spare working-memory capacity; a model that truly fits should measurably free up cognitive headroom, not just produce text people approve of.\n\n12. **Correction-type clustering (\"re-prompt fingerprinting\")** — cluster the *kinds* of follow-up corrections the person issues (\"shorter,\" \"less formal,\" \"cite sources,\" \"don't apologize\") into a personal drift vector, and check whether that vector shrinks or stays chaotic over time; a shrinking, coherent correction vocabulary means the model is converging on the person's implicit preferences, while a persistently scattered one means it never will no matter how many sessions pass.", "ok": true}, {"model": "claude-opus-4-5", "probe": "copy", "ptype": "copy", "kind": "single", "text": "1. **Nag** — The habit tracker that won't shut up until you do.\n2. **Ouch** — Miss a habit, feel the sting.\n3. **Grudge** — It remembers what you promised yourself.\n4. **Pester** — Gentle torment for your own good.\n5. **Shame Garden** — Watch your neglect bloom.\n6. **The Reckoning** — Your habits have consequences.\n7. **Scoldr** — Disappointment, delivered daily.\n8. **Bad Dog** — Train yourself with treats and rolled-up newspapers.\n9. **Guilt Trip** — Pack your bags, you're going somewhere.\n10. **Consequences** — Because your future self is watching.", "ok": true}, {"model": "claude-opus-4-5", "probe": "humor", "ptype": "humor", "kind": "single", "text": "1. \"Works on my machine\" is just \"the lab results were normal\" for people who mass-produce their own problems.\n\n2. Local CI is a simulation where you're the only customer, the network never fails, and your test database has never been touched by a product manager with \"just a quick fix.\"\n\n3. Production failures are just your code finally meeting users who refuse to read the tutorial you also didn't write.\n\n4. The green checkmark in local CI is your code's tinder photo. Production is the actual date.\n\n5. Debugging a prod-only failure is like being a detective where every witness is a log line that says \"info: things are happening.\"\n\n6. Your laptop is a safe space where race conditions politely wait their turn and memory is a renewable resource.\n\n7. Local tests pass because localhost has Stockholm syndrome.\n\n8. CI passing locally means you've successfully proven your code works in the one environment where no one will ever run it.\n\n9. The gap between local and prod is measured in \"undocumented environment variables some guy named Kyle set in 2019.\"\n\n10. Prod-only failures are the universe's way of reminding you that computers are just sand we tricked into doing math, and sometimes the sand remembers.", "ok": true}, {"model": "claude-opus-4-5", "probe": "tech", "ptype": "tech", "kind": "single", "text": "1. **Clipboard forensics** — Track what percentage of LLM output actually gets pasted/used vs. discarded; high discard rates reveal silent misfit.\n\n2. **Prompt entropy over time** — Measure whether your prompts get longer and more defensive week-over-week; rising complexity signals the model isn't learning your implicit norms.\n\n3. **Abandonment archaeology** — Log tasks where you started with the LLM then silently switched to Google/StackOverflow/doing it yourself; the switch pattern reveals blind spots.\n\n4. **Trust calibration score** — Before each response, predict confidence (will this be usable?); compare to actual outcome; poor calibration means you can't rely on your intuitions about when to use it.\n\n5. **Edit distance audit** — For every output you ship, measure Levenshtein distance from raw response; consistently high edits mean it's a rough-draft generator, not a collaborator.\n\n6. **Interrupt cost accounting** — Time how long it takes to re-enter flow state after an LLM interaction; some tools break concentration even when \"correct.\"\n\n7. **Serendipity journaling** — Weekly, note ideas the LLM surfaced that you wouldn't have reached alone; zero entries means it's a typist, not a thought partner.\n\n8. **Explanation resonance test** — Have it explain something you already know deeply; if the framing feels foreign or you'd never teach it that way, your mental models clash.\n\n9. **Error recovery cost** — When it fails, clock the full remediation time (debug, revert, redo); cheap per-query cost hides expensive downstream cleanup.\n\n10. **Delegation ceiling probe** — Progressively hand off larger autonomous chunks; find the task size where you stop trusting unsupervised output—that ceiling defines real utility.\n\n11. **Vocabulary drift detection** — After a month, check if your own writing/code has absorbed LLM-isms you dislike; style leakage signals subtle misalignment.\n\n12. **Counterfactual replay** — Re-run last month's tasks with a different model, blind; compare not just quality but *friction*—did you fight it less?", "ok": true}, {"model": "claude-opus-4-5", "probe": "metaphor", "ptype": "metaphor", "kind": "single", "text": "Backpropagation works like seismologists triangulating an earthquake's origin from distant sensors. The \"tremor\" (error) recorded at the output propagates backwards through each layer of the network, and at every layer the algorithm computes how much that layer's \"geological structure\" (weights) bent or amplified the signal—using only local information plus what arrived from the layer above. Each weight receives a correction proportional to its actual contribution to the final disturbance, determined by multiplying these local sensitivities along the entire path (the chain rule). No layer needs global knowledge; each just passes along a refined tremor signal for the layer beneath it.", "ok": true}]};
+/* === DATA END === */
+
+// ---- markdown -> normalized HTML ----
+function esc(s){return (s||"").replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));}
+function mdToHtml(s){
+  const L = esc(s).split(/\n/);
+  let out="", inUl=false, inOl=false;
+  const close=()=>{ if(inUl){out+="</ul>";inUl=false;} if(inOl){out+="</ol>";inOl=false;} };
+  const inline=x=>x.replace(/`([^`]+)`/g,'<code>$1</code>')
+                   .replace(/\*\*(.+?)\*\*/g,'<strong>$1</strong>')
+                   .replace(/(^|[^*])\*([^*]+?)\*/g,'$1<em>$2</em>');
+  const cells=r=>r.replace(/^\s*\|/,'').replace(/\|\s*$/,'').split('|').map(c=>c.trim());
+  const isSep=r=>/-/.test(r) && /^\s*\|?[\s:|-]+$/.test(r);
+  for(let i=0;i<L.length;i++){
+    const ln=L[i];
+    if(/^\s*```/.test(ln)){ close(); const buf=[]; i++;
+      while(i<L.length && !/^\s*```/.test(L[i])){ buf.push(L[i]); i++; }
+      out+="<pre><code>"+buf.join("\n")+"</code></pre>"; continue; }
+    if(ln.includes('|') && i+1<L.length && isSep(L[i+1])){
+      close(); const rows=[ln,L[i+1]]; let j=i+2;
+      while(j<L.length && L[j].includes('|') && L[j].trim()!==""){ rows.push(L[j]); j++; }
+      i=j-1; const head=cells(rows[0]);
+      let t="<table class='md'><thead><tr>"+head.map(c=>"<th>"+inline(c)+"</th>").join("")+"</tr></thead><tbody>";
+      for(let r=2;r<rows.length;r++){ const c=cells(rows[r]); t+="<tr>"+c.map(x=>"<td>"+inline(x)+"</td>").join("")+"</tr>"; }
+      out+=t+"</tbody></table>"; continue; }
+    const h=ln.match(/^\s*#{1,6}\s+(.*)$/), ul=ln.match(/^\s*[-*+]\s+(.*)$/), ol=ln.match(/^\s*\d+[.)]\s+(.*)$/);
+    if(h){ close(); out+="<h4>"+inline(h[1])+"</h4>"; }
+    else if(ul){ if(!inUl){close();out+="<ul>";inUl=true;} out+="<li>"+inline(ul[1])+"</li>"; }
+    else if(ol){ if(!inOl){close();out+="<ol>";inOl=true;} out+="<li>"+inline(ol[1])+"</li>"; }
+    else if(ln.trim()===""){ close(); }
+    else { close(); out+="<p>"+inline(ln)+"</p>"; }
+  }
+  close(); return out;
+}
+function short(s){s=s||"";return s.length>64?s.slice(0,64)+"…":s;}
+
+// ---- data index ----
+const PROBES = BLIND_DATA.probes.filter(p =>
+  BLIND_DATA.items.filter(it=>it.probe===p.id && it.ok!==false).length>=2);
+const ITEM = {}; // probe|model -> item
+BLIND_DATA.items.forEach(it=>{ if(it.ok!==false) ITEM[it.probe+"|"+it.model]=it; });
+
+// ---- state ----
+const LS = "blindrank_creativity_v1";
+let S = load();
+function freshState(){
+  return {ratings:{}, annots:[], cardMemo:{}, labelMap:{}, qi:0};
+}
+function load(){
+  let x=null; try{x=JSON.parse(localStorage.getItem(LS));}catch(e){}
+  if(!x) return freshState();
+  x.ratings=x.ratings||{}; x.annots=x.annots||[]; x.cardMemo=x.cardMemo||{};
+  x.labelMap=x.labelMap||{}; x.qi=x.qi||0; return x;
+}
+function save(){ localStorage.setItem(LS, JSON.stringify(S)); }
+function saveServer(){
+  try{ fetch("/save_rank",{method:"POST",headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({ratings:S.ratings,annots:S.annots,cardMemo:S.cardMemo,
+      divergence:BLIND_DATA.divergence,labels:BLIND_DATA.labels})}).catch(()=>{}); }catch(e){}
+}
+
+const ABC = "ABCDEFGHIJKLMNOP".split("");
+// 질문별 블라인드 라벨: 모델 순서를 섞어 A~ 부여(질문마다 다르게 → 정체 추적 차단)
+function labelOrder(probe){
+  if(S.labelMap[probe]) return S.labelMap[probe];
+  const models = BLIND_DATA.models.filter(m=>ITEM[probe+"|"+m]);
+  // 결정적 셔플(probe 문자열 해시 시드)
+  let seed=0; for(const c of probe) seed=(seed*31+c.charCodeAt(0))>>>0;
+  const arr=models.slice();
+  for(let i=arr.length-1;i>0;i--){ seed=(seed*1103515245+12345)>>>0; const j=seed%(i+1); [arr[i],arr[j]]=[arr[j],arr[i]]; }
+  S.labelMap[probe]=arr; save(); return arr;
+}
+
+let curCards=[]; // [{model,bodyEl,notesEl,memoEl,probe}]
+
+function bodyHTML(it, probe){
+  if(it.kind==="dialogue"){
+    const p = PROBES.find(x=>x.id===probe) || {};
+    return `<div class="seg model"><div class="sw">첫 답변</div><div class="t">${mdToHtml(it.a)}</div></div>`
+      + `<div class="seg user"><div class="sw">↪ 사용자 반박</div><div class="t">${esc(p.rebuttal||"")}</div></div>`
+      + `<div class="seg model"><div class="sw">반박 후 답변</div><div class="t">${mdToHtml(it.text)}</div></div>`;
+  }
+  return mdToHtml(it.text);
+}
+function starHTML(probe, model){
+  const v = (S.ratings[probe]||{})[model] || 0;
+  let s=""; for(let k=1;k<=5;k++) s+=`<span class="s ${k<=v?'on':''}" data-k="${k}">★</span>`;
+  return s;
+}
+function renderQuestion(){
+  if(!PROBES.length){ document.getElementById("grid").innerHTML='<div class="hint">데이터가 부족합니다.</div>'; return; }
+  if(S.qi<0) S.qi=0; if(S.qi>=PROBES.length) S.qi=PROBES.length-1;
+  const probe = PROBES[S.qi];
+  document.getElementById("ctxLbl").textContent = "질문 "+(S.qi+1)+"/"+PROBES.length+" · 상황(9개 카드 모두 동일)";
+  document.getElementById("ctxQ").textContent = probe.prompt;
+  const reb=document.getElementById("ctxReb");
+  if(probe.ptype==="challenge"){ reb.style.display="block"; reb.textContent="↪ 이어서 사용자가 반박함: "+(probe.rebuttal||""); }
+  else reb.style.display="none";
+  // qnav
+  document.getElementById("qnav").innerHTML = PROBES.map((p,i)=>{
+    const rated = BLIND_DATA.models.filter(m=>ITEM[p.id+"|"+m] && (S.ratings[p.id]||{})[m]).length;
+    const tot = BLIND_DATA.models.filter(m=>ITEM[p.id+"|"+m]).length;
+    const cls = i===S.qi?"on":(rated>=tot?"done":"");
+    return `<button class="dot ${cls}" data-i="${i}">${i+1} ${rated}/${tot}★</button>`;
+  }).join("");
+  document.querySelectorAll("#qnav .dot").forEach(b=>b.onclick=()=>{ S.qi=+b.dataset.i; save(); renderQuestion(); });
+  // cards
+  const order = labelOrder(probe.id);
+  const grid = document.getElementById("grid");
+  curCards=[];
+  grid.innerHTML = order.map((model,idx)=>{
+    const rated = (S.ratings[probe.id]||{})[model] ? "rated":"";
+    return `<div class="card ${rated}" id="card_${idx}">
+      <div class="chead"><span class="k">${ABC[idx]}</span><span class="who">응답 ${ABC[idx]}</span>
+        <span class="sp"></span>
+        <span class="stars" id="stars_${idx}">${starHTML(probe.id,model)}</span>
+        <span class="clearx" id="clear_${idx}" title="별점 지움">✕</span></div>
+      <div class="body" id="cb_${idx}"></div>
+      <div class="cnotes" id="cn_${idx}"></div>
+      <input class="cmemo" id="cm_${idx}" type="text" placeholder="✎ 이 답변 전체 메모…" maxlength="140" autocomplete="off"></div>`;
+  }).join("");
+  order.forEach((model,idx)=>{
+    const it = ITEM[probe.id+"|"+model];
+    const bodyEl=document.getElementById("cb_"+idx);
+    bodyEl.innerHTML = bodyHTML(it, probe.id);
+    const memoEl=document.getElementById("cm_"+idx);
+    curCards.push({model, idx, probe:probe.id, bodyEl, notesEl:document.getElementById("cn_"+idx), memoEl});
+    // stars
+    const starWrap=document.getElementById("stars_"+idx);
+    starWrap.querySelectorAll(".s").forEach(sp=>sp.onclick=()=>setStar(probe.id,model,+sp.dataset.k,idx));
+    document.getElementById("clear_"+idx).onclick=()=>setStar(probe.id,model,0,idx);
+    // memo + annotations
+    memoEl.value = (S.cardMemo[model+"|"+probe.id])||"";
+    memoEl.oninput=()=>{ S.cardMemo[model+"|"+probe.id]=memoEl.value; save(); };
+    memoEl.onblur=saveServer;
+    wireBody(bodyEl, model, probe.id);
+    applyAnnots(idx, model, probe.id);
+  });
+  document.getElementById("stat").textContent = ratedTotal()+" / "+(PROBES.length*BLIND_DATA.models.length)+" 별점";
+  document.getElementById("prevQ").disabled = S.qi===0;
+  document.getElementById("nextQ").disabled = S.qi===PROBES.length-1;
+  hideAdd(); closePop();
+}
+function ratedTotal(){ let n=0; for(const p in S.ratings) for(const m in S.ratings[p]) if(S.ratings[p][m]) n++; return n; }
+function setStar(probe, model, k, idx){
+  S.ratings[probe]=S.ratings[probe]||{};
+  if(k===0 || S.ratings[probe][model]===k) delete S.ratings[probe][model];
+  else S.ratings[probe][model]=k;
+  save(); saveServer();
+  document.getElementById("stars_"+idx).innerHTML = starHTML(probe,model);
+  document.getElementById("stars_"+idx).querySelectorAll(".s").forEach(sp=>sp.onclick=()=>setStar(probe,model,+sp.dataset.k,idx));
+  document.getElementById("card_"+idx).classList.toggle("rated", !!(S.ratings[probe]||{})[model]);
+  document.getElementById("stat").textContent = ratedTotal()+" / "+(PROBES.length*BLIND_DATA.models.length)+" 별점";
+}
+
+// ---- annotation engine (reused) ----
+function offOf(root,node,offset){ const r=document.createRange(); r.selectNodeContents(root);
+  try{ r.setEnd(node,offset); }catch(e){ return 0; } return r.toString().length; }
+function rangeFromOff(root,start,end){
+  const w=document.createTreeWalker(root,NodeFilter.SHOW_TEXT);
+  let total=0,n,r=document.createRange(),sset=false;
+  while((n=w.nextNode())){ const len=n.nodeValue.length;
+    if(!sset && total+len>=start){ r.setStart(n,Math.max(0,Math.min(len,start-total))); sset=true; }
+    if(sset && total+len>=end){ r.setEnd(n,Math.max(0,Math.min(len,end-total))); return r; }
+    total+=len; }
+  return sset?r:null;
+}
+function markRange(root,range,aid,num){
+  const w=document.createTreeWalker(root,NodeFilter.SHOW_TEXT); const nodes=[]; let n;
+  while((n=w.nextNode())){ if(range.intersectsNode(n)) nodes.push(n); }
+  let last=null;
+  nodes.forEach(t=>{ const s=(t===range.startContainer)?range.startOffset:0;
+    const e=(t===range.endContainer)?range.endOffset:t.nodeValue.length;
+    if(e<=s) return; const sub=document.createRange(); sub.setStart(t,s); sub.setEnd(t,e);
+    const mk=document.createElement("mark"); mk.className="annot"; mk.dataset.aid=aid; sub.surroundContents(mk); last=mk; });
+  if(last) last.dataset.num=num;
+}
+function applyAnnots(idx, model, probe){
+  const bodyEl=document.getElementById("cb_"+idx), notesEl=document.getElementById("cn_"+idx);
+  const list=S.annots.filter(a=>a.model===model && a.probe===probe).sort((x,y)=>x.start-y.start);
+  list.forEach((a,i)=>{ try{ const r=rangeFromOff(bodyEl,a.start,a.end); if(r) markRange(bodyEl,r,a.aid,i+1); }catch(e){} });
+  notesEl.innerHTML = list.length ? ('<div class="cnotes-h">── 내 주석 ──</div>'+
+    list.map((a,i)=>`<div class="cnote"><sup>${i+1}</sup> <span class="cn-q">“${esc(short(a.quote))}”</span> — <span class="cn-t">${esc(a.note)}</span> <button class="cn-edit" data-aid="${a.aid}">수정</button><button class="cn-del" data-aid="${a.aid}">삭제</button></div>`).join("")) : "";
+  notesEl.querySelectorAll(".cn-del").forEach(b=>b.onclick=()=>{ S.annots=S.annots.filter(x=>x.aid!==b.dataset.aid); save();saveServer();renderQuestion(); });
+  notesEl.querySelectorAll(".cn-edit").forEach(b=>b.onclick=(e)=>startEdit(b.dataset.aid,e.clientX,e.clientY));
+}
+const addBtn=document.getElementById("annotAdd"), pop=document.getElementById("annotPop"),
+      popText=document.getElementById("annotText"), popQuote=document.getElementById("annotQuote");
+let pending=null, editingAid=null;
+function hideAdd(){ addBtn.style.display="none"; }
+function closePop(){ pop.style.display="none"; editingAid=null; pending=null; }
+function openPopAt(x,y){ pop.style.display="block";
+  pop.style.left=Math.min(Math.max(8,x),window.innerWidth-272)+"px";
+  pop.style.top=Math.min(Math.max(8,y),window.innerHeight-150)+"px"; }
+function startEdit(aid,x,y){ const a=S.annots.find(z=>z.aid===aid); if(!a) return;
+  editingAid=aid; pending=null; popQuote.textContent="“"+short(a.quote)+"”"; popText.value=a.note;
+  hideAdd(); openPopAt(x,y); popText.focus(); }
+function wireBody(bodyEl, model, probe){
+  bodyEl.addEventListener("mouseup",()=>setTimeout(()=>{
+    const sel=window.getSelection();
+    if(!sel||sel.isCollapsed||!sel.rangeCount){ hideAdd(); return; }
+    if(!bodyEl.contains(sel.anchorNode)||!bodyEl.contains(sel.focusNode)) return;
+    const quote=sel.toString().trim(); if(quote.length<2){ hideAdd(); return; }
+    const range=sel.getRangeAt(0);
+    let s=offOf(bodyEl,range.startContainer,range.startOffset);
+    let e=offOf(bodyEl,range.endContainer,range.endOffset); if(e<s){const t=s;s=e;e=t;}
+    pending={model, probe, start:s, end:e, quote};
+    const rc=range.getBoundingClientRect();
+    addBtn.style.display="block";
+    addBtn.style.left=Math.min(Math.max(8,rc.left+rc.width/2-40),window.innerWidth-90)+"px";
+    addBtn.style.top=Math.max(8,rc.top-38)+"px";
+  },1));
+  bodyEl.addEventListener("click",e=>{ const m=e.target.closest&&e.target.closest("mark.annot"); if(m) startEdit(m.dataset.aid,e.clientX,e.clientY); });
+}
+addBtn.addEventListener("mousedown",e=>e.preventDefault());
+addBtn.addEventListener("click",()=>{ if(!pending) return;
+  editingAid=null; popQuote.textContent="“"+short(pending.quote)+"”"; popText.value="";
+  openPopAt(parseFloat(addBtn.style.left), parseFloat(addBtn.style.top)+34); hideAdd(); popText.focus(); });
+function saveAnnot(){
+  const note=popText.value.trim();
+  if(editingAid){ const a=S.annots.find(z=>z.aid===editingAid); if(a){ if(note)a.note=note; else S.annots=S.annots.filter(z=>z.aid!==editingAid); } }
+  else if(pending && note){ S.annots.push({aid:"a"+Date.now().toString(36)+Math.floor(Math.random()*1e4).toString(36),
+    model:pending.model, probe:pending.probe, quote:pending.quote, start:pending.start, end:pending.end, note, t:Date.now()}); }
+  save(); saveServer(); closePop(); try{window.getSelection().removeAllRanges();}catch(e){} renderQuestion();
+}
+document.getElementById("annotSave").onclick=saveAnnot;
+document.getElementById("annotCancel").onclick=()=>{ closePop(); try{window.getSelection().removeAllRanges();}catch(e){} };
+popText.addEventListener("keydown",e=>{ if((e.metaKey||e.ctrlKey)&&e.key==="Enter"){e.preventDefault();saveAnnot();} else if(e.key==="Escape"){closePop();} });
+document.addEventListener("scroll",()=>hideAdd(),true);
+
+// ---- nav ----
+document.getElementById("prevQ").onclick=()=>{ if(S.qi>0){S.qi--;save();renderQuestion();window.scrollTo(0,0);} };
+document.getElementById("nextQ").onclick=()=>{ if(S.qi<PROBES.length-1){S.qi++;save();renderQuestion();window.scrollTo(0,0);} };
+document.addEventListener("keydown",e=>{
+  if(e.target&&(e.target.tagName==="INPUT"||e.target.tagName==="TEXTAREA")) return;
+  if(pop.style.display==="block") return;
+  if(document.getElementById("result").style.display==="block") return;
+  if(e.key==="ArrowLeft") document.getElementById("prevQ").click();
+  else if(e.key==="ArrowRight") document.getElementById("nextQ").click();
+});
+
+// ---- result / reveal ----
+function spearman(xs,ys){
+  const rank=a=>{const idx=a.map((v,i)=>[v,i]).sort((p,q)=>p[0]-q[0]);const r=Array(a.length);
+    let i=0;while(i<idx.length){let j=i;while(j+1<idx.length&&idx[j+1][0]===idx[i][0])j++;
+    const avg=(i+j)/2+1;for(let k=i;k<=j;k++)r[idx[k][1]]=avg;i=j+1;}return r;};
+  const rx=rank(xs),ry=rank(ys),n=xs.length;const m=a=>a.reduce((s,v)=>s+v,0)/n;
+  const mx=m(rx),my=m(ry);let cov=0,sx=0,sy=0;
+  for(let i=0;i<n;i++){cov+=(rx[i]-mx)*(ry[i]-my);sx+=(rx[i]-mx)**2;sy+=(ry[i]-my)**2;}
+  return sx&&sy?cov/Math.sqrt(sx*sy):0;
+}
+function modelScores(){
+  // 모델별 평균 별점(매긴 질문만), 매긴 질문 수
+  const out={};
+  BLIND_DATA.models.forEach(m=>{
+    let sum=0,c=0;
+    PROBES.forEach(p=>{ const v=(S.ratings[p.id]||{})[m]; if(v){sum+=v;c++;} });
+    out[m]={avg:c?sum/c:0, n:c, total:PROBES.filter(p=>ITEM[p.id+"|"+m]).length};
+  });
+  return out;
+}
+function showResult(){
+  document.getElementById("app").style.display="none";
+  const R=document.getElementById("result"); R.style.display="block";
+  const lab=BLIND_DATA.labels, div=BLIND_DATA.divergence, sc=modelScores();
+  const models=BLIND_DATA.models.filter(m=>sc[m].n>0).sort((a,b)=>sc[b].avg-sc[a].avg);
+  const elos=models.map(m=>sc[m].avg), divs=models.map(m=>div[m]);
+  const rho=models.length>=3?spearman(divs,elos):NaN;
+  const rc=isNaN(rho)?"mid":(Math.abs(rho)>=0.6?"good":Math.abs(rho)>=0.3?"mid":"bad");
+  const rows=models.map((m,i)=>`<tr><td>${i+1}. ${esc(lab[m]||m)}</td>
+    <td>${sc[m].avg.toFixed(2)}★</td><td>${(div[m]!=null?div[m].toFixed(1):"—")}</td><td>${sc[m].n}</td></tr>`).join("");
+  let annHtml="";
+  if(S.annots.length){ const byM={}; S.annots.forEach(a=>{(byM[a.model]=byM[a.model]||[]).push(a);});
+    annHtml='<div class="big">내가 단 주석 (정체 공개)</div>'+
+      Object.keys(byM).sort((x,y)=>(sc[y]?.avg||0)-(sc[x]?.avg||0)).map(m=>
+        `<div class="note" style="margin-top:8px"><b>${esc(lab[m]||m)}</b></div>`+
+        byM[m].map(a=>`<div class="note">· <span class="muted">“${esc(short(a.quote))}”</span> — ${esc(a.note)} <span class="muted">(${a.probe})</span></div>`).join("")).join(""); }
+  let memoHtml="";
+  const memoKeys=Object.keys(S.cardMemo).filter(k=>S.cardMemo[k]&&S.cardMemo[k].trim());
+  if(memoKeys.length){ memoHtml='<div class="big">카드 총평 메모</div>'+memoKeys.map(k=>{
+    const [m,p]=k.split("|"); return `<div class="note">· ${esc(S.cardMemo[k])} <span class="muted">(${esc(lab[m]||m)} / ${p})</span></div>`; }).join(""); }
+  R.innerHTML = `
+    <div class="big">결과 — 네 말투 선호 순위 (정체 공개)</div>
+    <table class="res"><thead><tr><th>모델 (평균 별점순)</th><th>평균★</th><th>발산점수</th><th>매긴 질문</th></tr></thead>
+    <tbody>${rows}</tbody></table>
+    <div class="big">말투 선호(평균 별점) ↔ 발산 점수 상관</div>
+    <div><span class="rho ${rc}">ρ = ${isNaN(rho)?"—":rho.toFixed(3)}</span>
+      <span class="muted"> &nbsp;(+1에 가까울수록 "발산 높은 모델 = 말투 좋다" 성립)</span></div>
+    ${models.length>=3?scatterSVG(models,divs,elos,lab):""}
+    <div class="caveat">⚠ 평균 별점은 매긴 질문만 반영. 질문마다 9개 다 매겨야 공정. 마크다운은 정규화로 식별단서 제거했지만 길이·구조는 남을 수 있음.</div>
+    ${annHtml}${memoHtml}
+    <div style="margin-top:24px"><button id="btnBack">← 더 매기기</button>
+      <button id="btnExport" class="ghost">내보내기 (정체 포함)</button></div>`;
+  document.getElementById("btnBack").onclick=()=>{R.style.display="none";document.getElementById("app").style.display="block";renderQuestion();};
+  document.getElementById("btnExport").onclick=exportJSON;
+}
+function scatterSVG(models,divs,elos,lab){
+  const W=640,H=320,pad=46;
+  const xs=divs.filter(v=>v!=null), xmin=Math.min(...xs),xmax=Math.max(...xs),ymin=Math.min(...elos),ymax=Math.max(...elos);
+  const sx=v=>pad+(W-2*pad)*((v-xmin)/((xmax-xmin)||1));
+  const sy=v=>H-pad-(H-2*pad)*((v-ymin)/((ymax-ymin)||1));
+  let pts=models.map((m,i)=>{ if(divs[i]==null) return "";
+    const x=sx(divs[i]),y=sy(elos[i]); const right=x>W*0.72, tx=right?x-8:x+8, anc=right?"end":"start";
+    return `<circle cx="${x}" cy="${y}" r="5" fill="#6ea8fe"/>
+      <text x="${tx}" y="${y+4}" text-anchor="${anc}" fill="#cdd2de" font-size="11">${esc(lab[m]||m)}</text>`;}).join("");
+  return `<svg class="scatter" width="100%" viewBox="0 0 ${W} ${H}">
+    <text x="${W/2}" y="${H-12}" fill="#8b90a0" font-size="12" text-anchor="middle">발산 점수 →</text>
+    <text x="14" y="${H/2}" fill="#8b90a0" font-size="12" text-anchor="middle" transform="rotate(-90 14 ${H/2})">너의 말투 선호 (평균★) →</text>
+    ${pts}</svg>`;
+}
+function exportJSON(){
+  const payload={...S, divergence:BLIND_DATA.divergence, labels:BLIND_DATA.labels, scores:modelScores()};
+  const blob=new Blob([JSON.stringify(payload,null,2)],{type:"application/json"});
+  const url=URL.createObjectURL(blob); const a=document.createElement("a");
+  a.href=url; a.download="blindrank_result.json"; document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
+}
+document.getElementById("btnResult").onclick=showResult;
+document.getElementById("btnReset").onclick=()=>{ if(confirm("별점·주석 전부 지움?")){ localStorage.removeItem(LS); S=load();
+  document.getElementById("result").style.display="none"; document.getElementById("app").style.display="block"; renderQuestion(); } };
+
+renderQuestion();
+</script>
+</body>
+</html>

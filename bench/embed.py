@@ -6,10 +6,17 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
+import os
+import tempfile
+import threading
 import time
 import urllib.request
+from pathlib import Path
+
+from . import config
 
 OLLAMA_BASE = "http://localhost:11434"
 OLLAMA = f"{OLLAMA_BASE}/api/embed"
@@ -33,24 +40,39 @@ def available() -> bool:
         return False
 
 
-def _post_embed(body: bytes) -> dict:
+# 콜드 로딩 흡수용 긴 타임아웃 — 12GB 임베딩 모델 GPU 상주에 실측 수 분까지 걸린다
+# (콜드 build_game이 120s×재시도를 넘겨 367초 후 timeout 실패한 사례). 워밍업만 이
+# 타임아웃을 쓰고, 일반 턴 임베딩 경로(120s)는 그대로 둔다.
+WARMUP_TIMEOUT = 600
+
+
+def _post_embed(body: bytes, timeout: int = 120) -> dict:
     req = urllib.request.Request(OLLAMA, data=body,
                                  headers={"Content-Type": "application/json"})
-    with urllib.request.urlopen(req, timeout=120) as r:
+    with urllib.request.urlopen(req, timeout=timeout) as r:
         return json.loads(r.read())
 
 
-def _post_embed_with_retry(body: bytes) -> dict:
-    """임베딩 POST를 재시도. socket.timeout/URLError 등 일시 장애를 흡수한다."""
+def _post_embed_with_retry(body: bytes, timeout: int = 120) -> dict:
+    """임베딩 POST를 재시도. socket.timeout/URLError/HTTPError 등 일시 장애를 흡수한다."""
     last: BaseException | None = None
     for attempt in range(len(EMBED_RETRY_BACKOFF) + 1):
         try:
-            return _post_embed(body)
-        except OSError as exc:  # socket.timeout·URLError 모두 OSError 계열
+            return _post_embed(body, timeout=timeout)
+        except OSError as exc:  # socket.timeout·URLError·HTTPError 모두 OSError 계열
             last = exc
             if attempt < len(EMBED_RETRY_BACKOFF):
                 time.sleep(EMBED_RETRY_BACKOFF[attempt])
     raise last  # type: ignore[misc]
+
+
+def warmup(model: str = MODEL, prefix: bool = True) -> None:
+    """모델 로딩 흡수 — 어휘 일괄 임베딩 전에 단건을 긴 타임아웃(WARMUP_TIMEOUT)으로
+    호출해 콜드 스타트(모델 GPU 상주)를 흡수한다. 콜드 로딩 직후 일시 HTTP 400도
+    관찰됐으므로 _post_embed_with_retry의 재시도가 그 첫 실호출 흔들림을 흡수한다."""
+    text = (_PREFIX if prefix else "") + "워밍업"
+    body = json.dumps({"model": model, "input": [text]}).encode()
+    _post_embed_with_retry(body, timeout=WARMUP_TIMEOUT)
 
 
 def embed(texts: list[str], prefix: bool = True, *, model: str = MODEL) -> list[list[float]]:
@@ -74,6 +96,108 @@ def embed(texts: list[str], prefix: bool = True, *, model: str = MODEL) -> list[
             out[idx] = v
             _cache[(model, todo[j])] = v
     return out  # type: ignore
+
+
+# ----------------------------------------------------------------------
+# 기준어휘 벡터 디스크 캐시 — 웜 build_game의 어휘 재임베딩(실측 ~27초)을 제거한다.
+# 순수 메모이제이션: 오라클 metadata(모델·prefix·어휘 해시)·measurement_key 불변.
+# 오히려 어휘 벡터를 디스크에 고정해 임베딩 코배칭 노이즈(동시 요청 시 같은 입력이
+# ~4.3e-4 흔들리는 실측)를 없애 재생 검증 재현성을 높인다. 손상·불일치·읽기 실패는
+# 조용히 무시하고 재계산·재기록한다. arena를 임포트하지 않는 자체 원자 쓰기를 쓴다.
+# ----------------------------------------------------------------------
+def _embed_cache_path(model: str, prefix: bool, words: list[str]) -> Path:
+    key = json.dumps({"model": model, "prefix": bool(prefix), "words": list(words)},
+                     ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    digest = hashlib.sha256(key.encode("utf-8")).hexdigest()
+    return Path(config.EMBED_CACHE_DIR) / f"{digest}.json"
+
+
+def _write_json_atomic(path: Path, data) -> None:
+    """임시파일 쓰고 os.replace로 원자 교체(부분쓰기 노출 차단)."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(data, handle, ensure_ascii=False)
+        os.replace(tmp, path)
+    finally:
+        try:
+            os.unlink(tmp)
+        except FileNotFoundError:
+            pass
+
+
+def _load_vocab_cache(path: Path, expected_count: int) -> list[list[float]] | None:
+    """캐시 로드 + 정합성 검증(벡터 개수=어휘 수, 차원 일치). 불일치/손상 → None."""
+    try:
+        data = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, ValueError):        # 읽기 실패·JSON 파싱 실패 모두 포함
+        return None
+    if not isinstance(data, dict):
+        return None
+    vecs = data.get("vectors")
+    if not isinstance(vecs, list) or len(vecs) != expected_count:
+        return None
+    dims = set()
+    for v in vecs:
+        if not isinstance(v, list) or not v:
+            return None
+        dims.add(len(v))
+    if expected_count and len(dims) != 1:  # 차원 불일치(빈 어휘는 검증 생략)
+        return None
+    return vecs
+
+
+def _store_vocab_cache(path: Path, model: str, prefix: bool,
+                       words: list[str], vecs: list[list[float]]) -> None:
+    digest = hashlib.sha256(
+        json.dumps(list(words), ensure_ascii=False, separators=(",", ":")).encode()
+    ).hexdigest()
+    payload = {
+        "model": model,
+        "prefix": bool(prefix),
+        "vocab_digest": "sha256:" + digest,
+        "count": len(words),
+        "dim": len(vecs[0]) if vecs else 0,
+        "vectors": vecs,
+    }
+    try:
+        _write_json_atomic(path, payload)
+    except OSError:
+        pass   # 캐시 기록 실패는 치명 아님 — 다음 빌드가 재계산한다
+
+
+def _warmup_quiet(model: str, prefix: bool) -> None:
+    try:
+        warmup(model, prefix)
+    except Exception:
+        pass   # 백그라운드 예열 실패는 무시 — 플레이 첫 턴이 재시도 정책으로 흡수한다
+
+
+def embed_vocab_cached(words: list[str], prefix: bool = True, *,
+                       model: str = MODEL, warm: bool = True) -> list[list[float]]:
+    """기준어휘 임베딩을 디스크 캐시로 메모이즈한다(적중 시 임베딩 호출 없음).
+
+    warm=True면 콜드 스타트를 흡수한다:
+      - 캐시 미스: 어휘 임베딩(120s 타임아웃, 콜드 로딩이 이를 넘겨 실패한 사례) 전에
+        워밍업을 '동기'로 태워 모델 로딩(실측 수 분)을 긴 타임아웃으로 흡수한다.
+      - 캐시 적중: 워밍업을 '백그라운드'로 돌려 빌드를 즉시 반환한다(웜 재빌드 <1s).
+        예열은 이후 플레이 턴이 콜드 스타트에 걸리지 않도록 준비만 한다.
+    """
+    words = list(words)
+    path = _embed_cache_path(model, prefix, words)
+    cached = _load_vocab_cache(path, len(words))
+    if cached is not None:
+        if warm:
+            threading.Thread(target=_warmup_quiet, args=(model, prefix),
+                             daemon=True).start()
+        return cached
+    if warm:
+        warmup(model, prefix)     # 미스: 콜드 로딩 동기 흡수 후 어휘 임베딩
+    vecs = embed(words, prefix=prefix, model=model)
+    _store_vocab_cache(path, model, prefix, words, vecs)
+    return vecs
 
 
 def model_info(model: str = MODEL) -> dict:

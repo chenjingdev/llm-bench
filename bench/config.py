@@ -10,6 +10,9 @@ ROOT = Path(__file__).resolve().parent.parent
 RESULTS = ROOT / "results"
 RAW = RESULTS / "raw"          # 모델 원시 응답 JSONL
 REPORTS = RESULTS / "reports"  # 집계/리포트 산출물
+# 기준어휘 임베딩 벡터 디스크 캐시 — 웜 build_game의 어휘 재임베딩(실측 ~27초) 제거.
+# 순수 메모이제이션이라 오라클 metadata·measurement_key에 영향 없음.
+EMBED_CACHE_DIR = ROOT / ".cache" / "embeddings"
 
 # --- 비교 대상 ----------------------------------------------------------
 # 1차 가설: 4.8 = 실행/추론, 4.6 = 대화/발상.
@@ -102,6 +105,11 @@ def model_name(model: str) -> str:
 # --- Mindmatch 게임 파일럿 모델 -----------------------------------------
 # 꼬맨틀 스위트 기본 대상(R6): 저비용 클로드 + 코덱스 루나, effort low.
 GAME_PILOT_MODELS = ["claude-haiku-4-5", "codex-5.6-luna"]
+
+# 정규 문제 세트 seed(측정 경제 계약 §9): 웹 런처의 "정규 세트" 토글(기본 ON)이 이
+# 값을 seed_base로 보낸다 → 같은 조건의 완주 결과를 재사용해 새 모델만 실측한다.
+# 고정 seed라야 measurement_key(seeds 포함)가 런 간 일치해 재사용이 성립한다.
+ARENA_SUITE_SEED_BASE = 314159
 
 
 def vendor(model: str) -> str:

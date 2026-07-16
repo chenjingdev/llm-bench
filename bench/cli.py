@@ -47,7 +47,7 @@ def cmd_arena(a):
         run_dir = arena.run_arena(
             a.game, participants, episodes=a.episodes, max_turns=a.max_turns,
             effort=a.effort, seed_base=a.seed, call_timeout=a.call_timeout,
-            workers=a.workers,
+            workers=a.workers, reuse=not a.no_reuse, repeat_seed=a.repeat_seed,
         )
         print(str(run_dir))
     elif a.arena_cmd == "verify":
@@ -115,6 +115,10 @@ def main(argv=None):
     arr.add_argument("--call-timeout", type=int, default=180, dest="call_timeout")
     arr.add_argument("--workers", type=int, default=None,
                      help=f"동시 실행 상한(기본: min(참가자수, {arena.MAX_WORKERS_DEFAULT}))")
+    arr.add_argument("--no-reuse", action="store_true", dest="no_reuse",
+                     help="정규 세트 재사용 비활성화 — 동일 조건이어도 전부 다시 측정")
+    arr.add_argument("--repeat-seed", action="store_true", dest="repeat_seed",
+                     help="전 에피소드에 같은 seed(같은 문제)를 줘 반복 측정(표본 편차)")
     arr.set_defaults(func=cmd_arena)
 
     arv = arsub.add_parser("verify", help="저장된 run 재생 검증")
