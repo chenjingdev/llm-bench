@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import signal
 import subprocess
 import tempfile
 import threading
@@ -36,6 +37,43 @@ class CallResult:
     # codex/agy는 usage 미보고라 0 유지(정직하게).
     cache_creation_input_tokens: int = 0
     cache_read_input_tokens: int = 0
+
+
+# ----------------------------------------------------------------------
+# 공통 서브프로세스 실행 — 타임아웃 시 프로세스 그룹째 kill
+# ----------------------------------------------------------------------
+def _killpg(proc: subprocess.Popen) -> None:
+    """프로세스 그룹 전체에 SIGKILL — 손자까지 죽여 상속된 파이프를 닫는다."""
+    try:
+        os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+    except ProcessLookupError:
+        pass  # 이미 종료됨
+
+
+def _run(cmd: list[str], *, timeout: int, cwd: Optional[str] = None,
+         text: bool = True) -> subprocess.CompletedProcess:
+    """capture_output 서브프로세스 실행 — subprocess.run 대체.
+
+    subprocess.run(timeout=)은 직접 자식만 kill하는데, 손자 프로세스가 stdout/stderr
+    파이프를 물고 살아있으면 read가 EOF를 못 받아 영원히 블록된다(Python 공식 문서 명시).
+    start_new_session으로 새 프로세스 그룹을 만들고 타임아웃 시 killpg로 그룹 전체를 죽여
+    파이프를 닫는다. 타임아웃이면 subprocess.TimeoutExpired를 던진다(호출부의 기존 except
+    semantics 유지). 반환까지 상한 ≈ timeout + 수 초.
+    """
+    proc = subprocess.Popen(
+        cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        text=text, cwd=cwd, start_new_session=True,
+    )
+    try:
+        out, err = proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        _killpg(proc)
+        try:
+            proc.communicate(timeout=5)  # 그룹이 죽어 파이프가 닫히므로 유한
+        except subprocess.TimeoutExpired:
+            pass
+        raise
+    return subprocess.CompletedProcess(cmd, proc.returncode, out, err)
 
 
 def _build_cmd(model: str, prompt: str, effort: str, system: Optional[str],
@@ -94,9 +132,7 @@ def call(
     cmd = _build_cmd(model, prompt, effort, system)
     t0 = time.time()
     try:
-        proc = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=timeout,
-        )
+        proc = _run(cmd, timeout=timeout)
     except subprocess.TimeoutExpired:
         return CallResult(model, "", 0.0, 0, 0, int((time.time() - t0) * 1000),
                           "", ok=False, error="timeout")
@@ -169,13 +205,14 @@ def _call_claude_stream(model: str, prompt: str, effort: str,
     cmd = _build_cmd(model, prompt, effort, system, stream=True)
     t0 = time.time()
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                            text=True, bufsize=1)
+                            text=True, bufsize=1, start_new_session=True)
     timed_out = {"v": False}
 
     def _kill():
+        # 손자가 파이프를 잡으면 read가 영원히 블록되므로 프로세스 그룹째 kill
         timed_out["v"] = True
         try:
-            proc.kill()
+            _killpg(proc)
         except Exception:
             pass
 
@@ -257,7 +294,7 @@ def _call_codex(model: str, prompt: str, effort: str, timeout: int) -> CallResul
     ]
     t0 = time.time()
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, cwd=iso)
+        proc = _run(cmd, timeout=timeout, cwd=iso)
     except subprocess.TimeoutExpired:
         return CallResult(model, "", 0.0, 0, 0, int((time.time() - t0) * 1000),
                           "", ok=False, error="timeout")
@@ -300,7 +337,7 @@ def _call_gemini(model: str, prompt: str, effort: str, timeout: int) -> CallResu
     cmd = [config.AGY_BIN, "-p", prompt, "--model", gmodel]
     t0 = time.time()
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, cwd=iso)
+        proc = _run(cmd, timeout=timeout, cwd=iso)
     except subprocess.TimeoutExpired:
         return CallResult(model, "", 0.0, 0, 0, int((time.time() - t0) * 1000),
                           "", ok=False, error="timeout")
