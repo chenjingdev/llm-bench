@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import bisect
 import hashlib
 import json
 import math
@@ -10,40 +11,29 @@ import re
 import statistics
 import threading
 from dataclasses import dataclass
+from pathlib import Path
 
 from .. import embed
 from .base import Action, GameState, new_time_ns
 
 
-TARGET_WORDS = (
-    "가족", "거울", "겨울", "경찰", "고양이", "공원", "공장", "과학", "교실", "구름",
-    "기억", "기차", "나무", "날씨", "노래", "농장", "눈물", "도서관", "도시", "동물",
-    "마음", "바다", "박물관", "병원", "봄날", "비행기", "사랑", "사진", "산책", "선생님",
-    "소설", "시장", "신문", "약속", "여행", "영화", "우산", "우체국", "운동", "음악",
-    "의사", "자동차", "자전거", "정원", "지하철", "친구", "학교", "행복", "호수", "회사",
-)
+# 참조 어휘·정답 풀은 데이터 파일에서 로드한다(2.0.0). wordfreq 한국어 빈도 상위에서
+# kiwipiepy로 일반명사(NNG)만 필터한 5,000어휘와, 그 중 빈도 순위 300~2,500 구간에서
+# 결정론 선정한 400 정답(최빈어 제외 = 난이도 상승). 생성: scripts/gen_ko_vocab.py
+# (wordfreq/kiwipiepy는 생성 시에만 필요, 런타임 의존 아님). TARGET ⊆ REFERENCE 불변식.
+_DATA_DIR = Path(__file__).resolve().parent / "data"
 
-REFERENCE_WORDS = (
-    "가게", "가구", "가방", "가을", "간호사", "강물", "거리", "건물", "게임", "결혼",
-    "경기", "경제", "계단", "계절", "고기", "고향", "공기", "공부", "공연", "공책",
-    "공항", "과일", "관계", "광장", "교사", "교육", "교통", "구두", "구조", "그림",
-    "글씨", "기계", "기분", "기술", "기억", "기차", "길거리", "꽃밭", "나라", "낚시",
-    "남편", "냉장고", "노동", "노인", "농부", "다리", "대학", "도로", "독서", "동생",
-    "마을", "마차", "문학", "문화", "물고기", "미술", "바람", "바위", "반지", "방송",
-    "배우", "버스", "병원", "부모", "부엌", "비밀", "사무실", "사슴", "사전", "산업",
-    "새벽", "생각", "생활", "서점", "선물", "선박", "설탕", "세계", "소리", "손님",
-    "수업", "숲길", "시간", "식당", "아기", "아버지", "아침", "어머니", "언어", "얼굴",
-    "역사", "연구", "연극", "열차", "예술", "요리", "운전", "웃음", "은행", "음식",
-    "의자", "이야기", "인간", "일기", "작가", "작품", "전쟁", "전화", "정치", "종이",
-    "주방", "주택", "직업", "책상", "청소", "축구", "커피", "컴퓨터", "태양", "편지",
-    "평화", "하늘", "학생", "항구", "형제", "회의", "휴대폰", "희망",
-) + TARGET_WORDS
+
+def _load_words(name: str) -> tuple[str, ...]:
+    text = (_DATA_DIR / name).read_text(encoding="utf-8")
+    return tuple(w for w in text.split() if w)
+
+
+TARGET_WORDS = _load_words("ko_targets.txt")
+REFERENCE_WORDS = _load_words("ko_vocab.txt")   # 정답을 이미 포함(생성 시 부분집합 보장)
 
 # 출력 JSON의 추측 키. 모델은 이 키 하나를 가진 JSON 오브젝트만 뱉어야 한다.
 _OUTPUT_KEY = "발화할 단어"
-# 시작_기록 선정 밴드 크기 — 유사도 최하위 K개(정답에서 가장 먼 꼴찌권)에서 1개를 뽑는다.
-# 레인마다 단어는 다르지만 전부 최하위권이라 출발 정보가치가 균등(다양화+공정성 동시).
-_START_BAND_K = 20
 # 추측 인자: 한 글자 이상 12자 이하 한국어 단어(정답은 모두 2자+라 승부엔 지장 없음).
 _WORD = re.compile(r"^[가-힣]{1,12}$")
 
@@ -196,18 +186,20 @@ class EmbeddingOracle:
 
 class KoreanSemantle:
     id = "ko-semantle"
-    version = "1.6.0"   # 에피소드별 시작_기록(꼴찌권 랜덤 단어 실채점) 추가(측정 조건 변경)
+    version = "2.0.0"   # 어휘 5,000·정답 400으로 확장(wordfreq+kiwipiepy 생성, 난이도 상승)
     DEFAULT_MAX_TURNS = 40
+    # 무작위 오프닝 추첨 밴드: target 대비 순위 백분위 30~70%(중위). 운 좋게 정답
+    # 근처에서 출발하는 레인을 차단하고, 첫 추측 수렴(프롬프트 동일성 탓)을 하네스가 끊는다.
+    _OPENING_BAND = (0.30, 0.70)
 
     # 멀티게임 저장/검증 일반화용 계약 필드(계약 v1 §1). 값·포맷은 기존 저장
     # 스키마와 키·값 수준에서 동일하도록 고정한다(추가만, 로직/버전 무변경).
-    TURN_FIELDS = ("guess", "similarity", "rank", "sim_to_prev")
+    # auto: 자동 오프닝 턴에만 붙는 플래그(모델 턴엔 부재). 추가만.
+    TURN_FIELDS = ("guess", "similarity", "rank", "sim_to_prev", "auto")
     INVALID_KEEP = ("guess",)
     LIVE_LAST_FIELDS = ("guess", "similarity", "rank")
-    # 시작_기록은 (seed, nonce)에서 결정론 재도출되므로 verify가 RESULT_FIELDS 대조로
-    # 일치 확인한다(단어=문자열, 유사도/순위=어휘 캐시 벡터 기반이라 정확 재현 → 무관용).
     RESULT_FIELDS = ("solved", "turns", "best_rank", "best_rank_curve", "score",
-                     "max_plateau", "fixation_sim", "시작_기록")
+                     "max_plateau", "fixation_sim")
     needs_ollama = True
     # 임베딩 오라클의 동시 요청 코배칭 노이즈(실측 Δsimilarity ~2e-4 → Δrank ≤ 1)를
     # 재생 검증에서 수용한다. rank 파생 지표(curve/plateau/score)도 노이즈로 rank가 1
@@ -224,7 +216,10 @@ class KoreanSemantle:
     def metadata(self) -> dict:
         return {"game": self.id, "version": self.version, **self.oracle.metadata}
 
-    def reset(self, seed: int, nonce: str | None = None) -> GameState:
+    def reset(self, seed: int, nonce: str | None = None,
+              auto_open: bool = True) -> GameState:
+        # auto_open=False는 자동 오프닝을 끈다 — step/score/fixation 등 순수 게임 로직을
+        # 오프닝 노이즈 없이 단위 검증하기 위한 테스트 시임(실행/verify는 항상 기본 True).
         target = random.Random(seed).choice(TARGET_WORDS)
         state = GameState(self.id, self.version, seed, self.max_turns, target)
         # 에피소드 시작 시각(time_ns 정수) 1회 발급 — JSON 프롬프트의 time 필드이자
@@ -238,36 +233,48 @@ class KoreanSemantle:
         state.private["time_ns"] = t
         prepared = self.oracle.prepare(target)
         state.private["oracle"] = prepared
-        # 시작_기록: 꼴찌권(유사도 최하위 K밴드)에서 (seed,nonce) 결정론 선택 → 실제 채점.
-        # 레인마다 의미가 다른 텍스트가 시작 기록으로 들어가되 전부 최하위권이라 공정하다.
-        # 모델의 추측이 아니므로 state.history(=이전_기록·턴수·최고_순위)엔 넣지 않는다.
-        start_word = self._pick_start_word(prepared, seed, state.nonce)
-        fb = self.oracle.evaluate(prepared, start_word)
-        state.private["start_record"] = {
-            "단어": start_word,
-            "유사도": round(fb.similarity * 100, 2),
-            "순위": fb.rank,
-        }
+        # 무작위 오프닝: 중위 순위 밴드에서 (seed,nonce) 결정론 선택 → 실채점 → 정식 1턴
+        # 기록으로 state.history에 넣는다(모델 호출 없음, 추가 토큰 0). 모델은 2턴부터.
+        # verify는 (seed,nonce)로 이 오프닝을 동일 재도출해 대조한다(nonce가 episode_end 기록).
+        if auto_open:
+            opening = self._pick_opening_word(prepared, seed, state.nonce)
+            fb = self.oracle.evaluate(prepared, opening)
+            state.seen.add(opening)
+            state.turn = 1
+            state.history.append({
+                "turn": 1, "valid": True, "raw": "", "guess": opening,
+                "similarity": round(fb.similarity, 8), "rank": fb.rank,
+                "sim_to_prev": None, "auto": True,
+            })
+            if state.turn >= state.max_turns:   # max_turns<=1이면 오프닝만으로 종료
+                state.done = True
+                state.stop_reason = "max_turns"
         return state
 
-    def _pick_start_word(self, prepared: dict, seed: int, nonce: str) -> str:
-        """유사도 최하위 K밴드에서 (seed,nonce) 결정론 RNG로 단어 하나 선택(정답 제외).
+    def _pick_opening_word(self, prepared: dict, seed: int, nonce: str) -> str:
+        """중위 순위 밴드(_OPENING_BAND)에서 (seed,nonce) 결정론 RNG로 어휘 1개 선택.
 
-        정답은 유사도 1위라 최하위 밴드에 애초에 없지만 명시적으로도 배제한다. 동점은
-        단어 사전순으로 tie-break해 밴드 구성을 완전 결정론으로 만든다. nonce는 이미
-        episode_end에 기록되므로 verify가 seed+nonce로 동일하게 재도출할 수 있다.
+        정답(순위 1위)은 배제하고, target 대비 순위 백분위가 30~70%인 어휘만 후보로 둔다
+        (운 좋은 근접 출발·불운한 최하위 출발 모두 차단 → 레인 간 공정). 밴드 산출은 실오라클의
+        prepared["scores"](목표-어휘 코사인)로 하고, scores 미제공 오라클은 evaluate로 도출.
+        후보를 사전순 정렬해 완전 결정론으로 만든 뒤 RNG로 뽑는다.
         """
-        target = prepared["target"]
         words = self.oracle.words
-        scores = prepared.get("scores")   # 실오라클은 prepare에서 목표-어휘 코사인을 계산
+        target = prepared["target"]
+        n = len(words)
+        lo, hi = self._OPENING_BAND
+        scores = prepared.get("scores")
         if scores is not None:
-            graded = [(scores[i], words[i]) for i in range(len(words)) if words[i] != target]
-        else:                             # Fake/Stub 등 scores 미제공 → evaluate로 도출
-            graded = [(self.oracle.evaluate(prepared, w).similarity, w)
+            srt = sorted(scores)
+            ranked = [(1 + (n - bisect.bisect_right(srt, scores[i])), w)
+                      for i, w in enumerate(words) if w != target]
+        else:                             # Fake/Stub 등 scores 미제공 → evaluate로 순위 도출
+            ranked = [(self.oracle.evaluate(prepared, w).rank, w)
                       for w in words if w != target]
-        graded.sort(key=lambda sw: (sw[0], sw[1]))   # 유사도 최하위 우선, 동점은 사전순
-        band = graded[:_START_BAND_K]
-        return random.Random(f"{seed}:{nonce}").choice(band)[1]
+        band = sorted(w for rank, w in ranked if lo <= rank / n <= hi)
+        if not band:                      # 작은 어휘 안전 폴백: 비정답 어휘 전체
+            band = sorted(w for w in words if w != target)
+        return random.Random(f"{seed}:{nonce}").choice(band)
 
     @staticmethod
     def _pct(rank: int, n: int) -> int:
@@ -307,12 +314,11 @@ class KoreanSemantle:
                 "유사도는 고정된 로컬 임베딩으로 계산하며, 높을수록 정답과 의미가 가깝습니다.",
                 "유사도 절대값은 캘리브레이션이 어렵습니다. 순위와 상위백분위를 더 신뢰하세요.",
                 f"순위는 고정 비교 어휘 {n}개 안에서의 참고 순위입니다(낮을수록 정답에 가까움).",
-                "시작_기록은 무작위로 제공된 단어 하나의 실제 채점 결과입니다(정답 힌트 아님, 턴을 소모하지 않음).",
+                "1턴은 시스템이 무작위로 착수한 기록입니다(당신의 추측이 아님).",
                 "매 응답에는 정확히 한 개의 추측만 담으세요.",
             ],
             "총_비교_어휘_수": n,
             "time": state.private["time_ns"],
-            "시작_기록": state.private["start_record"],
             "이전_기록": records,
             "현재_턴": f"{state.turn + 1}/{state.max_turns}",
             "최고_순위": (None if best is None
@@ -437,8 +443,6 @@ class KoreanSemantle:
             "score": round(score, 6),
             "max_plateau": max_plateau,
             "fixation_sim": fixation_sim,
-            # 시작_기록(reset에서 발급, 턴으로 안 변함) → episode_end 기록 + verify 재도출 대조.
-            "시작_기록": state.private.get("start_record"),
             "stop_reason": state.stop_reason,
         }
 

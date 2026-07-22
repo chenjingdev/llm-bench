@@ -12,7 +12,7 @@
 추가: nonce 발급기가 빠른 연속/동시 호출에서도 유일(32레인 동시 시작 충돌 방지 —
 time_ns 단독은 해상도가 µs급이라 부족).
 
-주의: semantle(v1.6.0)은 태그 줄 대신 JSON 프로토콜의 `time` 정수 필드로 대체됐다.
+주의: semantle(v2.0.0)은 태그 줄 대신 JSON 프로토콜의 `time` 정수 필드로 대체됐다.
 태그 줄 검증은 maze/rulelab/minefield 3게임에만, semantle은 별도 JSON time 검증을 둔다.
 """
 from __future__ import annotations
@@ -51,19 +51,20 @@ class _StubOracle:
     def _coord(word: str) -> int:
         return int(hashlib.sha256(word.encode()).hexdigest()[:12], 16)
 
-    def _rank(self, ref: str, guess: str) -> int:
-        if guess == ref:
-            return 1
-        d = abs(self._coord(ref) - self._coord(guess))
-        return 1 + sum(1 for w in self.words if abs(self._coord(ref) - self._coord(w)) < d)
+    def _sim(self, ref: str, w: str) -> float:
+        return 1.0 / (1.0 + abs(self._coord(ref) - self._coord(w)))   # O(1), 가까울수록 큼
 
     def prepare(self, target):
-        return {"target": target}
+        # scores 제공 → semantle 오프닝 추첨(_pick_opening_word)이 bisect 경로(빠름)를 탄다.
+        return {"target": target, "scores": [self._sim(target, w) for w in self.words]}
 
     def evaluate(self, prepared, guess):
-        rank = self._rank(prepared["target"], guess)
-        sim = 1.0 if guess == prepared["target"] else 1.0 / (1.0 + rank)
-        return SimilarityFeedback(sim, rank)
+        ref = prepared["target"]
+        if guess == ref:
+            return SimilarityFeedback(1.0, 1)
+        s = self._sim(ref, guess)
+        rank = 1 + sum(1 for v in prepared["scores"] if v > s)
+        return SimilarityFeedback(s, rank)
 
     def pair_cosine(self, a, b):
         if a == b:
@@ -122,7 +123,7 @@ def test_nonce_differs_across_episodes(gid, make):
 
 
 def test_semantle_json_protocol_time_field():
-    """semantle(v1.6.0): 태그 줄 대신 JSON `time` 정수 필드(설명·지시 없이 값만).
+    """semantle(v2.0.0): 태그 줄 대신 JSON `time` 정수 필드(설명·지시 없이 값만).
 
     time은 에피소드 내 불변(프리픽스 캐시)·에피소드 간 상이(비동일화). "무시"/"난수" 류
     문구가 프롬프트 어디에도 없어야 한다(지난 태그 실험 실패 원인 = "무시" 지시).
@@ -179,7 +180,7 @@ def test_new_time_ns_monotonic_unique():
 
 def test_all_games_version_bumped():
     """프롬프트(=측정 조건) 변경 → 게임 버전 범프(semantle은 JSON 프로토콜)."""
-    assert KoreanSemantle.version == "1.6.0"
+    assert KoreanSemantle.version == "2.0.0"
     assert KoreanMaze.version == "1.1.0"
     assert RuleLab.version == "1.1.0"
     assert KoreanMinefield.version == "1.1.0"

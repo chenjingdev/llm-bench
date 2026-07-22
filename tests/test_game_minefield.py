@@ -15,8 +15,9 @@ import pytest
 
 from bench import embed
 from bench.games.minefield import (
-    BOOM_RANK, LIVES, MINES, MINE_RANK_MIN, WARN_RANK, KoreanMinefield)
-from bench.games.semantle import REFERENCE_WORDS, TARGET_WORDS, SimilarityFeedback
+    BOOM_RANK, LIVES, MINES, MINE_RANK_MIN, REFERENCE_WORDS, TARGET_WORDS,
+    WARN_RANK, KoreanMinefield)
+from bench.games.semantle import SimilarityFeedback
 
 
 # ----------------------------------------------------------------------

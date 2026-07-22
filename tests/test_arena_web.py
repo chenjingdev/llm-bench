@@ -1356,6 +1356,35 @@ def test_preparing_not_mislabeled_done_in_html():
     assert "preparing?'preparing':running?'running':failed?'failed':stopped?'stopped':'done'" in html
 
 
+def test_auto_opening_turn_marker_in_html():
+    # 무작위 오프닝(auto:true) 턴을 이력 칩에서 정직히 구분 — 모델 성과처럼 보이면 안 됨.
+    html = arena_web._render_index()
+    # 칩 클래스에 auto + '배정' 표식 + 안내 title(라벨 없는 구분 금지)
+    assert "hchip'+(t.auto?' auto':'')" in html
+    assert "el('span','ha','배정')" in html
+    assert "시스템 무작위 착수(모델 추측 아님)" in html
+    # 히트색(성과 톤)은 auto 아닌 턴에만 — auto는 뮤트 톤 + 점선
+    assert ".hchip.auto" in html and ".hchip .ha" in html
+    assert "chip.style.background=`rgb(" in html                 # 비-auto 턴은 여전히 히트색
+
+
+def test_auto_turn_excluded_from_record_emphasis_in_html():
+    # '방금 기록 갱신' 등 모델 성과 강조는 모델 실제 턴만 근거 — auto 턴 제외(순위 계산 자체는 무변경).
+    html = arena_web._render_index()
+    body = html.split("function statusLine(v){", 1)[1].split("function ", 1)[0]
+    assert "v.valid.filter(t=>!t.auto)" in body                  # auto 제외한 모델 턴으로 갱신/제자리 판정
+    assert "if(!mturns.length) return null;" in body             # auto 착수만 있으면 강조 생략
+
+
+def test_auto_field_backward_compat_in_html():
+    # 하위호환: auto 필드 없는 구 데이터(1.7.0-)는 t.auto가 undefined(falsy)로 취급 →
+    #   이력 칩은 히트색 정상 렌더, statusLine 필터도 전 턴 유지(무영향).
+    html = arena_web._render_index()
+    # auto 판정이 truthy 체크(t.auto)라 undefined → 기존 경로. '배정'/auto 클래스는 t.auto일 때만.
+    assert "if(t.auto){" in html                                 # auto일 때만 분기(없으면 기존 렌더)
+    assert "mturns.filter" not in html                           # 필터는 v.valid 대상(구 데이터도 그대로 통과)
+
+
 def test_preparing_lane_and_caption_in_html():
     # 보드 레인/캡션: 준비 중 전용 라벨(대기와 구분) + 헤더/캡션에 준비 중 명시.
     html = arena_web._render_index()

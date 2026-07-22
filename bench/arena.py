@@ -343,6 +343,15 @@ def _play_episode(game, model: str, effort: str, episode: int, seed: int,
                   stream_path: Path, call_timeout: int, retries: int,
                   usage_total: dict) -> tuple[dict, int]:
     state = game.reset(seed)
+    # reset이 모델 호출 없이 미리 채운 자동 오프닝 턴(있으면)을 먼저 이벤트로 방출한다
+    # (semantle 1.8.0: 무작위 오프닝 1턴. 다른 게임은 빈 history → 이 루프 무영향).
+    # usage=0(추가 토큰 없음). verify는 reset 재도출본과 대조하므로 raw 재생 대상 아님.
+    for step_event in list(state.history):
+        event = _turn_event(game, state, episode, step_event)
+        event["usage"] = _zero_usage()
+        _append_jsonl(events_path, event)
+        _write_json_atomic(live_path, _live(
+            game, state, model, effort, episode, state.turn, max_turns, "running", event))
     while not state.done:
         # 진행 중인 턴 번호(= 다음에 채워질 턴)로 stream sink를 연다.
         writer = _StreamWriter(stream_path, model, effort, episode, state.turn + 1)
@@ -808,25 +817,30 @@ def verify_run(run_dir: Path) -> dict:
             if not (isinstance(ep, int) and 1 <= ep <= len(seeds)):
                 errors.append(f"episode {ep}: missing seed")
                 continue
-            # 저장된 nonce를 reset에 넘겨 nonce 파생 결과(semantle 시작_기록 등)를 동일하게
-            # 재도출한다. nonce 인자를 안 받는 게임(구형/스텁 reset)은 없이 재생(재생 무해).
+            # 저장된 nonce를 reset에 넘겨 nonce 파생 결과를 동일하게 재도출할 수 있게 한다
+            # (현재 semantle은 nonce 무의존이지만, 향후 게임/재사용 대비해 파이프라인 유지).
+            # nonce 인자를 안 받는 게임(구형/스텁 reset)은 없이 재생(재생 무해).
             end = next((e for e in evs if e.get("type") == "episode_end"), None)
             seed_val = int(seeds[ep - 1])
             try:
                 state = game.reset(seed_val, nonce=(end.get("nonce") if end else None))
             except TypeError:
                 state = game.reset(seed_val)
-            for saved in evs:
-                if saved.get("type") != "turn":
-                    continue
-                replayed = game.step(state, game.parse(saved.get("raw", "")))
+            # reset이 미리 채운 자동 오프닝 턴(앞 n_auto개)은 step 재생이 아니라 재도출본
+            # (state.history)과 대조한다 — raw=""를 재파싱하면 안 되기 때문. 나머지 모델 턴만
+            # step 재생. 오프닝 없는 게임은 n_auto=0이라 전부 step 재생(기존 동작 그대로).
+            saved_turns = [e for e in evs if e.get("type") == "turn"]
+            n_auto = len(state.history)
+            for i, saved in enumerate(saved_turns):
+                computed = (state.history[i] if i < n_auto
+                            else game.step(state, game.parse(saved.get("raw", ""))))
                 # "valid"는 항상 정확 비교. TURN_FIELDS는 valid 턴에만 저장되므로(무효
                 # 턴 레코드의 progress 파생 필드를 재생 step 이벤트와 오대조하지 않게)
-                # saved["valid"]가 참인 턴에서만 대조한다.
+                # saved["valid"]가 참인 필드만 대조한다.
                 for field in ("valid", *game.TURN_FIELDS):
                     if field != "valid" and not saved.get("valid"):
                         continue
-                    if not _fields_match(field, replayed.get(field),
+                    if not _fields_match(field, computed.get(field),
                                          saved.get(field), tol_map):
                         errors.append(
                             f"episode {ep} turn {saved.get('turn')}: {field} mismatch")

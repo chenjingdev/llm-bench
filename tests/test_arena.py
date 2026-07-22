@@ -93,7 +93,7 @@ def test_parse_requires_exactly_one_json_object():
 
 def test_step_rejects_duplicate_and_reports_schema():
     game = KoreanSemantle(FakeOracle(), max_turns=4)
-    state = game.reset(1)
+    state = game.reset(1, auto_open=False)   # step 로직 단독 검증(오프닝 노이즈 제거)
     ev = game.step(state, game.parse(_guess("의사")))
     assert ev["valid"] is True
     assert ev["guess"] == "의사"
@@ -107,7 +107,7 @@ def test_step_rejects_duplicate_and_reports_schema():
 
 def test_score_solved_and_unsolved():
     solved_game = KoreanSemantle(FakeOracle(), max_turns=4)
-    s = solved_game.reset(11)
+    s = solved_game.reset(11, auto_open=False)   # 점수 로직 단독(1턴에 해결 → score 1.0)
     solved_game.step(s, solved_game.parse(_guess(s.secret)))
     res = solved_game.result(s)
     assert res["solved"] is True
@@ -115,7 +115,7 @@ def test_score_solved_and_unsolved():
     assert res["score"] == 1.0
 
     miss_game = KoreanSemantle(FakeOracle(), max_turns=1)
-    st = miss_game.reset(1)
+    st = miss_game.reset(1, auto_open=False)
     wrong = next(w for w in _BOT_WORDS if w != st.secret)
     miss_game.step(st, miss_game.parse(_guess(wrong)))
     r2 = miss_game.result(st)
@@ -132,7 +132,11 @@ def test_seed_determinism_same_target():
     assert a == b
 
 
-def test_registry_four_games():
+def test_registry_four_games(monkeypatch):
+    # 실오라클 5,000어휘 임베딩(ollama)을 타지 않게 어휘 로딩/모델정보를 스텁(설정만 검증).
+    monkeypatch.setattr(sm.embed, "model_info", lambda m: {"digest": "x"})
+    monkeypatch.setattr(sm.embed, "embed_vocab_cached",
+                        lambda words, prefix=True, *, model=None: [[0.0]] * len(words))
     assert game_names() == ["ko-semantle", "ko-rulelab", "ko-maze", "ko-minefield"]
     assert build_game("ko-semantle").max_turns == 40
     assert build_game("ko-semantle", max_turns=12).max_turns == 12
@@ -142,10 +146,31 @@ def test_registry_four_games():
 
 
 # ----------------------------------------------------------------------
+# 2.0.0: 어휘 5,000·정답 400 데이터 파일 로드(wordfreq+kiwipiepy 생성, 난이도 상승)
+# ----------------------------------------------------------------------
+def test_vocab_data_files_loaded():
+    assert len(sm.REFERENCE_WORDS) == 5000
+    assert len(sm.TARGET_WORDS) == 400
+    assert len(set(sm.REFERENCE_WORDS)) == 5000              # 중복 없음
+    assert set(sm.TARGET_WORDS) <= set(sm.REFERENCE_WORDS)   # TARGET ⊆ REFERENCE 불변식
+    assert all(re.fullmatch(r"[가-힣]{2,4}", w) for w in sm.REFERENCE_WORDS)  # 2~4자 한글
+
+
+def test_vocab_digest_recorded_in_metadata(monkeypatch):
+    # 새 어휘 digest가 오라클 metadata(vocab_digest)에 자동 기록된다(measurement 격리).
+    monkeypatch.setattr(sm.embed, "model_info", lambda m: {"digest": "x"})
+    monkeypatch.setattr(sm.embed, "embed_vocab_cached",
+                        lambda words, prefix=True, *, model=None: [[0.0]] * len(words))
+    md = sm.EmbeddingOracle().metadata                       # 기본 = 5,000어휘
+    assert md["reference_words"] == 5000
+    assert md["vocab_digest"].startswith("sha256:")
+
+
+# ----------------------------------------------------------------------
 # v1.1.0: 1글자 허용 · 오류 원인 구분 · 백분위 · sim_to_prev · 고착 지표
 # ----------------------------------------------------------------------
-def test_version_is_1_6_0():
-    assert KoreanSemantle.version == "1.6.0"
+def test_version_is_2_0_0():
+    assert KoreanSemantle.version == "2.0.0"
 
 
 def test_oracle_model_reflected_in_metadata(monkeypatch):
@@ -248,7 +273,7 @@ def test_sim_to_prev_is_deterministic():
     guesses = ["생활", "생각", "활동"]                       # 전부 비타깃 → 해결 안 됨
 
     def run():
-        s = game.reset(1)
+        s = game.reset(1, auto_open=False)   # sim_to_prev 로직 단독(첫 유효 추측 = null)
         return [game.step(s, game.parse(_guess(w))) for w in guesses]
 
     a, b = run(), run()
@@ -260,7 +285,7 @@ def test_sim_to_prev_is_deterministic():
 
 def test_fixation_metrics_max_plateau_and_sim():
     game = KoreanSemantle(FakeOracle(), max_turns=5)
-    state = game.reset(3)
+    state = game.reset(3, auto_open=False)   # 고착 지표 로직 단독(오프닝 노이즈 제거)
     for w in ["생활", "생각", "활동"]:                       # 모두 rank 3(비타깃)
         game.step(state, game.parse(_guess(w)))
     res = game.result(state)
@@ -274,7 +299,7 @@ def test_fixation_metrics_max_plateau_and_sim():
 def test_fixation_sim_null_without_plateau():
     # 매 턴 순위가 개선되면 정체 구간이 없어 fixation_sim은 null.
     game = KoreanSemantle(FakeOracle(), max_turns=5)
-    state = game.reset(5)
+    state = game.reset(5, auto_open=False)   # 정체 없음 검증(오프닝 노이즈 제거)
     game.step(state, game.parse(_guess("활동")))               # rank 3 (비타깃)
     game.step(state, game.parse(_guess("의사")))               # rank 2 (개선)
     res = game.result(state)
@@ -444,7 +469,7 @@ def test_storage_contract_and_no_target_leak(monkeypatch, tmp_path):
 
 
 def test_effort_is_passed_to_client(monkeypatch, tmp_path):
-    game = KoreanSemantle(FakeOracle(), max_turns=1)
+    game = KoreanSemantle(FakeOracle(), max_turns=2)   # 자동 오프닝(1턴)+모델 1턴
     monkeypatch.setattr(arena, "build_game", lambda *a, **k: game)
     monkeypatch.setattr(embed, "available", lambda: True)
     seen = []
@@ -465,7 +490,7 @@ def test_effort_is_passed_to_client(monkeypatch, tmp_path):
 
 
 def test_workers_param_caps_concurrency(monkeypatch, tmp_path):
-    game = KoreanSemantle(FakeOracle(), max_turns=1)
+    game = KoreanSemantle(FakeOracle(), max_turns=2)   # 자동 오프닝(1턴)+모델 1턴
     monkeypatch.setattr(arena, "build_game", lambda *a, **k: game)
     monkeypatch.setattr(embed, "available", lambda: True)
     st = {"cur": 0, "max": 0}
@@ -491,7 +516,7 @@ def test_workers_param_caps_concurrency(monkeypatch, tmp_path):
 
 
 def test_default_concurrency_capped_at_thirty_two(monkeypatch, tmp_path):
-    game = KoreanSemantle(FakeOracle(), max_turns=1)
+    game = KoreanSemantle(FakeOracle(), max_turns=2)   # 자동 오프닝(1턴)+모델 1턴
     monkeypatch.setattr(arena, "build_game", lambda *a, **k: game)
     monkeypatch.setattr(embed, "available", lambda: True)
     st = {"cur": 0, "max": 0}
@@ -561,7 +586,7 @@ def test_verify_handles_legacy_run(monkeypatch, tmp_path):
 
 
 def test_verify_skips_on_game_version_mismatch(monkeypatch, tmp_path):
-    game = KoreanSemantle(FakeOracle(), max_turns=3)   # version 1.6.0
+    game = KoreanSemantle(FakeOracle(), max_turns=3)   # version 2.0.0
     _patch_engine(monkeypatch, game)
     run_dir = arena.run_arena("ko-semantle", ["m-a@low"], episodes=1, max_turns=3,
                               seed_base=5, run_root=tmp_path)
@@ -574,7 +599,7 @@ def test_verify_skips_on_game_version_mismatch(monkeypatch, tmp_path):
     man_path.write_text(json.dumps(man, ensure_ascii=False), encoding="utf-8")
     assert arena.verify_run(run_dir) == {
         "ok": None, "skipped": "game-version-mismatch",
-        "manifest_version": "1.0.0", "current_version": "1.6.0"}
+        "manifest_version": "1.0.0", "current_version": "2.0.0"}
 
 
 def test_verify_skips_without_ollama(monkeypatch, tmp_path):
@@ -634,7 +659,7 @@ def _streaming_bot(model, prompt, *, on_text=None, **kwargs):
 
 
 def test_stream_json_written_and_finalized_during_run(monkeypatch, tmp_path):
-    game = KoreanSemantle(FakeOracle(), max_turns=1)
+    game = KoreanSemantle(FakeOracle(), max_turns=2)   # 자동 오프닝(1턴)+모델 1턴
     monkeypatch.setattr(arena, "build_game", lambda *a, **k: game)
     monkeypatch.setattr(embed, "available", lambda: True)
     monkeypatch.setattr(client, "call", _streaming_bot)
@@ -738,7 +763,7 @@ _USAGE_KEYS = {"input_tokens", "output_tokens", "cache_creation_input_tokens",
 
 
 def test_turn_event_records_usage(monkeypatch, tmp_path):
-    game = KoreanSemantle(FakeOracle(), max_turns=1)
+    game = KoreanSemantle(FakeOracle(), max_turns=2)   # 자동 오프닝(1턴)+모델 1턴
     monkeypatch.setattr(arena, "build_game", lambda *a, **k: game)
     monkeypatch.setattr(embed, "available", lambda: True)
 
@@ -754,7 +779,7 @@ def test_turn_event_records_usage(monkeypatch, tmp_path):
     events = [json.loads(l) for l in
               (run_dir / "models" / "m@low" / "events.jsonl").read_text(
                   encoding="utf-8").splitlines()]
-    turn = next(e for e in events if e["type"] == "turn")
+    turn = next(e for e in events if e["type"] == "turn" and not e.get("auto"))  # 모델 턴
     assert set(turn["usage"]) == _USAGE_KEYS
     assert turn["usage"] == {"input_tokens": 100, "output_tokens": 5,
                              "cache_creation_input_tokens": 80,
@@ -847,8 +872,7 @@ def test_turn_progresses_after_oracle_retry(monkeypatch):
     monkeypatch.setattr(embed.urllib.request, "urlopen", flaky)
     monkeypatch.setattr(embed.time, "sleep", lambda s: None)
     game = KoreanSemantle(_RetryProbeOracle(), max_turns=3)
-    state = game.reset(1)
-    calls["n"] = 0   # reset의 시작_기록 채점분 제외 — 이제부터 추측 턴만 계량(실패 1회 재장전)
+    state = game.reset(1, auto_open=False)   # 재시도 흡수만 계량(오프닝의 embed 호출 제외)
     ev = game.step(state, game.parse(_guess("무지개")))   # 비타깃 → embed 경유
     assert ev["valid"] is True                          # 재시도로 흡수 → 턴 정상 진행
     assert ev["guess"] == "무지개"
@@ -1072,9 +1096,9 @@ def test_generalized_engine_assembles_arbitrary_game(monkeypatch, tmp_path):
 
 
 def _semantle_mix_bot(model, prompt, *, on_text=None, **kwargs):
-    """턴1 유효(비타깃 '무지개'), 턴2 중복, 턴3 파싱 실패 — 세 갈래 턴 레코드 생성."""
+    """자동 오프닝(턴1) 뒤 모델: 턴2 유효('무지개'), 턴3 중복, 턴4 파싱 실패 — 세 갈래 생성."""
     t = _turn_no(prompt)
-    text = "행동 없이 설명만" if t == 3 else _guess("무지개")
+    text = "행동 없이 설명만" if t == 4 else _guess("무지개")
     if on_text is not None:
         on_text(text)
     return client.CallResult(model=model, text=text, cost_usd=0.0, input_tokens=1,
@@ -1083,12 +1107,12 @@ def _semantle_mix_bot(model, prompt, *, on_text=None, **kwargs):
 
 def test_semantle_schema_regression(monkeypatch, tmp_path):
     # 일반화 후에도 ko-semantle 산출 파일의 키 집합·핵심 값이 기존과 동일해야 한다.
-    game = KoreanSemantle(FakeOracle(), max_turns=3)   # '무지개'는 비타깃 → 미해결
+    game = KoreanSemantle(FakeOracle(), max_turns=4)   # 자동 오프닝1 + 모델 3턴(유효/중복/파싱실패)
     monkeypatch.setattr(arena, "build_game", lambda *a, **k: game)
     monkeypatch.setattr(embed, "available", lambda: True)
     monkeypatch.setattr(client, "call", _semantle_mix_bot)
 
-    run_dir = arena.run_arena("ko-semantle", ["m@low"], episodes=1, max_turns=3,
+    run_dir = arena.run_arena("ko-semantle", ["m@low"], episodes=1, max_turns=4,
                               effort="low", seed_base=100, run_root=tmp_path)
     slug = run_dir / "models" / "m@low"
     events = [json.loads(l) for l in
@@ -1096,10 +1120,17 @@ def test_semantle_schema_regression(monkeypatch, tmp_path):
     turns = [e for e in events if e["type"] == "turn"]
     ends = [e for e in events if e["type"] == "episode_end"]
 
-    valid = next(e for e in turns if e["valid"])
+    # 모델 유효 턴(자동 오프닝 턴은 auto 필드가 있어 별도 — 아래에서 확인).
+    valid = next(e for e in turns if e["valid"] and not e.get("auto"))
     assert set(valid) == {"type", "episode", "turn", "valid", "guess", "similarity",
                           "rank", "sim_to_prev", "best_rank", "raw", "ts", "usage"}
-    assert valid["best_rank"] == 3                     # progress로 산출해도 유효 rank와 일치
+    assert valid["best_rank"] == 2                     # 자동 오프닝 '의사'(rank 2)가 최고 순위
+
+    # 자동 오프닝 턴: 모델 턴과 동일 스키마 + auto 플래그(추가만). raw는 빈 문자열.
+    auto = next(e for e in turns if e.get("auto"))
+    assert set(auto) == {"type", "episode", "turn", "valid", "guess", "similarity",
+                         "rank", "sim_to_prev", "auto", "best_rank", "raw", "ts", "usage"}
+    assert auto["turn"] == 1 and auto["valid"] is True and auto["raw"] == ""
 
     dup = next(e for e in turns if not e["valid"] and "guess" in e)
     assert set(dup) == {"type", "episode", "turn", "valid", "guess", "error",
@@ -1112,7 +1143,7 @@ def test_semantle_schema_regression(monkeypatch, tmp_path):
 
     assert set(ends[0]) == {"type", "episode", "target", "solved", "turns", "best_rank",
                             "best_rank_curve", "score", "max_plateau", "fixation_sim",
-                            "시작_기록", "stop_reason", "nonce", "ts"}
+                            "stop_reason", "nonce", "ts"}
     assert "target" in ends[0]
 
     live = json.loads((slug / "live.json").read_text(encoding="utf-8"))
@@ -1831,7 +1862,7 @@ def test_oracle_embed_failure_message_names_cause(monkeypatch):
 
 def test_manifest_includes_pid(monkeypatch, tmp_path):
     # 웹 정지 기능의 killpg 대상 — manifest에 정수 pid(런 프로세스).
-    game = KoreanSemantle(FakeOracle(), max_turns=1)
+    game = KoreanSemantle(FakeOracle(), max_turns=2)   # 자동 오프닝(1턴)+모델 1턴
     _patch_engine(monkeypatch, game)
     run_dir = arena.run_arena("ko-semantle", ["m@low"], episodes=1, max_turns=1,
                               seed_base=1, run_root=tmp_path)
@@ -1841,11 +1872,14 @@ def test_manifest_includes_pid(monkeypatch, tmp_path):
 
 
 # ----------------------------------------------------------------------
-# 시작_기록 — 에피소드별 꼴찌권 랜덤 단어의 실채점(레인별 의미 다양화 + 공정성)
-# (숫자 노이즈 time은 무효였고, 레인마다 "의미로 읽는" 텍스트가 달라야 고착이 풀린다)
+# 무작위 오프닝(1.8.0) — 하네스가 1턴을 중위밴드 랜덤 어휘로 자동 착수(첫추측 수렴 차단)
 # ----------------------------------------------------------------------
-class _BandOracle:
-    """REFERENCE_WORDS 전체를 해시 좌표 거리로 결정론 채점 — band 멤버십 검증용."""
+class _BandStub:
+    """REFERENCE_WORDS 전체를 해시 좌표 거리로 결정론 채점 — 오프닝 밴드 검증용(실밴드).
+
+    prepare가 scores(단어별 O(1) 유사도)를 제공해 _pick_opening_word가 실오라클과
+    같은 bisect 경로(O(n log n))를 타게 한다 — 5,000어휘에서 O(n²) 회피(성능).
+    """
 
     words = sm.REFERENCE_WORDS
     model = "band-stub"
@@ -1859,98 +1893,112 @@ class _BandOracle:
     def _c(w):
         return int(hashlib.sha256(w.encode()).hexdigest()[:12], 16)
 
+    def _sim(self, ref, w):
+        return 1.0 / (1.0 + abs(self._c(ref) - self._c(w)))   # 0~1, 가까울수록 큼, O(1)
+
     def prepare(self, target):
-        return {"target": target}
+        return {"target": target, "scores": [self._sim(target, w) for w in self.words]}
 
     def evaluate(self, prepared, guess):
         ref = prepared["target"]
         if guess == ref:
             return SimilarityFeedback(1.0, 1)
-        d = abs(self._c(ref) - self._c(guess))
-        rank = 1 + sum(1 for w in self.words if abs(self._c(ref) - self._c(w)) < d)
-        return SimilarityFeedback(1.0 / (1.0 + rank), rank)
+        s = self._sim(ref, guess)
+        rank = 1 + sum(1 for v in prepared["scores"] if v > s)
+        return SimilarityFeedback(s, rank)
 
     def pair_cosine(self, a, b):
         return 1.0 if a == b else 0.0
 
 
-def test_start_record_deterministic_and_varies_by_nonce():
-    game = KoreanSemantle(_BandOracle(), max_turns=40)
-    a = game.reset(1, nonce="1000").private["start_record"]
-    b = game.reset(1, nonce="1000").private["start_record"]
-    assert a == b                                   # 같은 seed+nonce → 동일(결정론)
-    words = {game.reset(1, nonce=str(x)).private["start_record"]["단어"] for x in range(30)}
-    assert len(words) >= 5                           # 다른 nonce → 대체로 다른 단어
+def test_auto_opening_deterministic_and_varies_by_nonce():
+    game = KoreanSemantle(_BandStub(), max_turns=40)
+    a = game.reset(1, nonce="1000").history[0]["guess"]
+    b = game.reset(1, nonce="1000").history[0]["guess"]
+    assert a == b                                   # 같은 seed+nonce → 동일 오프닝(결정론)
+    words = {game.reset(1, nonce=str(x)).history[0]["guess"] for x in range(30)}
+    assert len(words) >= 5                           # 다른 nonce → 대체로 다른 오프닝
 
 
-def test_start_record_is_bottom_band_and_not_target():
-    game = KoreanSemantle(_BandOracle(), max_turns=40)
+def test_auto_opening_is_mid_band_and_not_target():
+    game = KoreanSemantle(_BandStub(), max_turns=40)
+    n = len(sm.REFERENCE_WORDS)
+    lo, hi = KoreanSemantle._OPENING_BAND
     for nonce in ("1", "2", "3", "7", "42"):
         state = game.reset(1, nonce=nonce)
-        prep, target = state.private["oracle"], state.secret
-        graded = sorted(
-            ((game.oracle.evaluate(prep, w).similarity, w)
-             for w in sm.REFERENCE_WORDS if w != target),
-            key=lambda sw: (sw[0], sw[1]))
-        band = {w for _, w in graded[:sm._START_BAND_K]}
-        sr = state.private["start_record"]
-        assert sr["단어"] in band                    # 유사도 최하위 K밴드
-        assert sr["단어"] != target                  # 정답 아님
-        # 실채점 일치: 시작_기록 순위·유사도가 evaluate 결과와 같다
-        fb = game.oracle.evaluate(prep, sr["단어"])
-        assert sr["순위"] == fb.rank
-        assert sr["유사도"] == round(fb.similarity * 100, 2)
+        op = state.history[0]
+        assert op["guess"] != state.secret           # 정답 배제
+        assert lo <= op["rank"] / n <= hi            # 중위 순위 밴드(30~70%)
+        fb = game.oracle.evaluate(state.private["oracle"], op["guess"])
+        assert op["rank"] == fb.rank                 # 실채점 일치
+        assert op["similarity"] == round(fb.similarity, 8)
 
 
-def test_render_includes_start_record_static_block():
+def test_auto_opening_is_formal_turn_one_with_flag():
     game = KoreanSemantle(FakeOracle(), max_turns=5)
     state = game.reset(1)
-    payload = json.loads(game.render(state))
-    sr = payload["시작_기록"]
-    assert set(sr) == {"단어", "유사도", "순위"}       # {단어,유사도,순위} 포맷
-    assert isinstance(sr["단어"], str) and isinstance(sr["순위"], int)
-    # 정적(불변) 블록에 위치: time 뒤, 이전_기록(append-only) 앞 → 프리픽스 캐시 정렬
-    blob = game.render(state)
-    assert blob.index('"time"') < blob.index('"시작_기록"') < blob.index('"이전_기록"')
-    assert any("시작_기록" in r for r in payload["규칙"])   # 설명 규칙 한 줄
-    # 에피소드 내 불변(턴이 지나도 동일)
-    game.step(state, game.parse(_guess("의사")))
-    assert json.loads(game.render(state))["시작_기록"] == sr
+    assert len(state.history) == 1                   # reset이 정식 1턴 기록을 채움
+    op = state.history[0]
+    assert op["turn"] == 1 and op["valid"] is True and op["auto"] is True
+    assert op["raw"] == "" and op["sim_to_prev"] is None
+    assert state.turn == 1                            # 모델은 2턴부터
+    assert op["guess"] in state.seen                  # 중복 방지에도 반영
+    p = json.loads(game.render(state))                # 렌더에 자연 반영
+    assert p["현재_턴"] == "2/5"
+    assert p["이전_기록"][0]["단어"] == op["guess"]
+    assert p["최고_순위"]["순위"] == op["rank"]
+    assert any("무작위로 착수" in r for r in p["규칙"])
 
 
-def test_start_record_does_not_affect_best_rank_or_history():
-    game = KoreanSemantle(FakeOracle(), max_turns=5)
-    state = game.reset(1)
-    p0 = json.loads(game.render(state))
-    assert p0["최고_순위"] is None                    # 추측 전 → 시작_기록 있어도 null
-    assert p0["이전_기록"] == []                       # 시작_기록은 이전_기록 오염 안 함
-    game.step(state, game.parse(_guess("의사")))        # 실제 추측 rank 2
-    p1 = json.loads(game.render(state))
-    assert p1["최고_순위"] == {"순위": 2, "상위백분위": 50}   # 모델 추측 기준만
-    res = game.result(state)
-    assert res["turns"] == 1                           # 시작_기록은 턴 미소모
-    assert res["best_rank"] == 2
+def test_auto_opening_model_plays_from_turn_two(monkeypatch, tmp_path):
+    game = KoreanSemantle(FakeOracle(), max_turns=3)
+    _patch_engine(monkeypatch, game)                 # _bot_call: 턴별 유효 추측
+    run_dir = arena.run_arena("ko-semantle", ["m@low"], episodes=1, max_turns=3,
+                              seed_base=1, run_root=tmp_path)
+    events = [json.loads(l) for l in
+              (run_dir / "models" / "m@low" / "events.jsonl").read_text(
+                  encoding="utf-8").splitlines()]
+    turns = [e for e in events if e["type"] == "turn"]
+    assert turns[0]["auto"] is True and turns[0]["turn"] == 1     # 1턴 자동
+    assert all(not t.get("auto") for t in turns[1:])             # 2턴부터 모델
+    assert turns[0]["usage"]["input_tokens"] == 0                # 자동 턴 토큰 0
+    assert [t["turn"] for t in turns] == [1, 2, 3]               # 오프닝이 1턴 소모
 
 
-def test_verify_rederives_start_record_from_nonce(monkeypatch, tmp_path):
+def test_auto_opening_verify_rederivation(monkeypatch, tmp_path):
     game = KoreanSemantle(FakeOracle(), max_turns=3)
     _patch_engine(monkeypatch, game)
     run_dir = arena.run_arena("ko-semantle", ["m@low"], episodes=2, max_turns=3,
                               seed_base=7, run_root=tmp_path)
-    events = [json.loads(l) for l in
-              (run_dir / "models" / "m@low" / "events.jsonl").read_text(
-                  encoding="utf-8").splitlines()]
-    ends = [e for e in events if e["type"] == "episode_end"]
-    assert ends and all(set(e["시작_기록"]) == {"단어", "유사도", "순위"} for e in ends)
-    # verify가 seed+nonce로 시작_기록을 재도출해 일치 → ok
-    assert arena.verify_run(run_dir)["ok"] is True
-    # 저장된 시작_기록을 위조하면 verify가 잡는다(재도출 불일치)
+    assert arena.verify_run(run_dir)["ok"] is True   # (seed,nonce)로 오프닝 재도출 일치
+    # 저장된 자동 오프닝 단어를 위조하면 verify가 잡는다(재도출 불일치)
     ev_path = run_dir / "models" / "m@low" / "events.jsonl"
     tampered = []
     for line in ev_path.read_text(encoding="utf-8").splitlines():
         e = json.loads(line)
-        if e.get("type") == "episode_end":
-            e["시작_기록"] = {"단어": "가짜", "유사도": 0.0, "순위": 999}
+        if e.get("auto"):
+            e["guess"] = "가짜단어"
         tampered.append(json.dumps(e, ensure_ascii=False))
     ev_path.write_text("\n".join(tampered) + "\n", encoding="utf-8")
     assert arena.verify_run(run_dir)["ok"] is False
+
+
+def test_render_differs_only_in_time_and_opening():
+    # 편향 탐침: 같은 시드(=같은 문제)면 레인(nonce)이 달라도 프롬프트는 time과 자동 오프닝
+    # 단어(1턴 기록)만 다르고 나머지(규칙/어휘/출력형식/지시)는 완전 동일해야 한다.
+    game = KoreanSemantle(_BandStub(), max_turns=5)
+    a = json.loads(game.render(game.reset(1, nonce="1000")))
+    op_a = a["이전_기록"][0]["단어"]
+    for x in range(50):                               # 오프닝이 다른 레인 하나 확보(밴드 큼)
+        b = json.loads(game.render(game.reset(1, nonce=f"alt{x}")))
+        if b["이전_기록"][0]["단어"] != op_a:
+            break
+    else:
+        raise AssertionError("오프닝 다양성 없음")
+    assert a["time"] != b["time"]                     # time은 레인별로 다르다
+    assert a["최고_순위"] != b["최고_순위"]             # 최고_순위도 오프닝 파생 → 레인별 다름
+    # time·오프닝 파생부(이전_기록·최고_순위)를 빼면 정적 프레임(규칙/어휘/출력형식/지시)은 동일
+    for d in (a, b):
+        d.pop("time"); d.pop("이전_기록"); d.pop("최고_순위")
+    assert a == b
+    assert "시작_기록" not in a                         # 작업 B 잔재 없음

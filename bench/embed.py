@@ -10,6 +10,7 @@ import hashlib
 import json
 import math
 import os
+import sys
 import tempfile
 import threading
 import time
@@ -27,6 +28,12 @@ _PREFIX = "clustering: "
 # 임베딩 호출 재시도 백오프(초). 최초 시도 + len회 재시도. 일시 포화·모델 리로드로
 # 인한 socket.timeout 등이 게임 턴을 통째로 죽이지 않게 흡수한다(소진 시에만 예외).
 EMBED_RETRY_BACKOFF = (2.0, 5.0)
+
+# 대량 입력(어휘 5,000개 등)을 단일 POST로 보내면 ollama가 순차 계산(~180ms/단어)하는
+# 동안 클라이언트 타임아웃(120s×재시도)을 소진해 socket.timeout으로 실패한다(실측: 2.0.0
+# 오라클 빌드 불가). 청크 단위로 나눠 순차 POST하면 청크당 타임아웃 안에 끝난다(128×0.18s
+# ≈ 23s < 120s). 전체 소요(~15분)는 어휘 빌드 1회에 한하며 이후는 디스크 캐시 즉답.
+EMBED_CHUNK = 128
 
 # 캐시 키는 (model, text) — 모델별로 벡터가 다르므로 분리한다.
 _cache: dict[tuple[str, str], list[float]] = {}
@@ -88,9 +95,17 @@ def embed(texts: list[str], prefix: bool = True, *, model: str = MODEL) -> list[
             todo.append(text)
             todo_idx.append(i)
     if todo:
-        body = json.dumps({"model": model, "input": todo}).encode()
-        data = _post_embed_with_retry(body)
-        embs = data["embeddings"]
+        # 청크 분할 순차 POST — 청크별 재시도, 결과를 입력 순서대로 이어붙인다.
+        embs: list[list[float]] = []
+        total = len(todo)
+        for start in range(0, total, EMBED_CHUNK):
+            chunk = todo[start:start + EMBED_CHUNK]
+            body = json.dumps({"model": model, "input": chunk}).encode()
+            data = _post_embed_with_retry(body)
+            embs.extend(data["embeddings"])
+            if total > EMBED_CHUNK:   # 대량(어휘 빌드) 경로만 진행 로그(~15분 관찰용)
+                print(f"[embed] {min(start + EMBED_CHUNK, total)}/{total} ({model})",
+                      file=sys.stderr, flush=True)
         for j, idx in enumerate(todo_idx):
             v = embs[j]
             out[idx] = v

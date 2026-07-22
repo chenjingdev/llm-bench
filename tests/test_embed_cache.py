@@ -161,3 +161,38 @@ def test_oracle_build_warms_up_and_disk_caches_vocab(monkeypatch, tmp_path):
             break
         time.sleep(0.01)
     assert warm["n"] == 1                          # 적중이어도 플레이 대비 예열은 수행
+
+
+# ----------------------------------------------------------------------
+# 청크 분할: 대량 입력을 EMBED_CHUNK 단위로 나눠 순차 POST(순서 보존)
+# ----------------------------------------------------------------------
+def test_embed_chunks_large_input_preserving_order(monkeypatch):
+    import math
+    embed._cache.clear()
+    chunks = []
+
+    def fake_post(body, timeout=120):
+        inp = json.loads(body.decode())["input"]
+        chunks.append(len(inp))
+        return {"embeddings": [[float(int(t[1:]))] for t in inp]}   # 인덱스 인코딩
+
+    monkeypatch.setattr(embed, "_post_embed", fake_post)
+    n = embed.EMBED_CHUNK * 2 + 5                 # 청크 경계를 여러 번 넘김
+    texts = [f"w{i}" for i in range(n)]
+    out = embed.embed(texts, prefix=False, model="probe")
+
+    # 청크 수 = ceil(n/CHUNK), 각 청크 ≤ CHUNK, 총합 == n(단일 거대 POST 아님)
+    assert len(chunks) == math.ceil(n / embed.EMBED_CHUNK)
+    assert all(c <= embed.EMBED_CHUNK for c in chunks) and max(chunks) == embed.EMBED_CHUNK
+    assert sum(chunks) == n
+    # 반환 순서 = 입력 순서(청크 경계 넘어서도 정확히 매핑)
+    assert out == [[float(i)] for i in range(n)]
+
+
+def test_embed_small_input_single_post(monkeypatch):
+    # 소량 입력(기존 경로) 불변: 청크 1개(단일 POST)로 처리.
+    embed._cache.clear()
+    calls = {"n": 0}
+    monkeypatch.setattr(embed, "_post_embed", _fake_post(calls))
+    out = embed.embed(["가", "나", "다"], prefix=False, model="probe")
+    assert calls["n"] == 1 and len(out) == 3

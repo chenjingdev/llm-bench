@@ -1467,6 +1467,10 @@ input[type=number],select{width:100%;height:38px;padding:0 11px;border-radius:9p
 .hchip .hw{min-width:0;font-weight:650;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .hchip .hr{flex:0 0 auto;font-size:11px;font-weight:600;opacity:.82;font-variant-numeric:tabular-nums}
 .hchip.inv{background:var(--surf3);color:var(--muted);font-weight:700;padding:3px 7px}
+/* 무작위 오프닝(auto): 모델 성과 아님 — 뮤트 톤 + 점선(outline은 레이아웃 불변) + '배정' 표식 */
+.hchip.auto{background:var(--surf3);color:var(--muted);outline:1px dashed var(--axis);outline-offset:-2px}
+.hchip .ha{flex:0 0 auto;font-size:9px;font-weight:800;letter-spacing:.03em;padding:1px 4px;
+  border-radius:4px;background:var(--surf);color:var(--muted)}
 
 /* 자원 지표(시간·출력 토큰): 정렬 꼬리와 동일 축을 노출 — 기존 지표를 밀어내지 않음 */
 .costline{display:flex;align-items:center;gap:12px;min-width:0;font-size:var(--f-cost);
@@ -2131,10 +2135,13 @@ function renderBoard(){
 }
 
 function statusLine(v){
-  if(!v.valid.length) return null;                 // no valid turn yet → omit
+  // 모델 성과 강조(기록 갱신/제자리)는 모델의 실제 턴만 근거 — auto(무작위 착수) 턴 제외.
+  // (bestRank 등 순위 계산 자체는 러너 데이터를 그대로 따르고, 여기선 표시 톤만 구분한다.)
+  const mturns=v.valid.filter(t=>!t.auto);
+  if(!mturns.length) return null;                  // 모델의 유효 턴 아직 없음(auto 착수만) → 강조 생략
   let best=Infinity, impIdx=-1;
-  v.valid.forEach((t,i)=>{ if(t.rank!=null && t.rank<best){ best=t.rank; impIdx=i; } });
-  const stall = v.valid.length-1 - impIdx;          // valid turns since last best improvement
+  mturns.forEach((t,i)=>{ if(t.rank!=null && t.rank<best){ best=t.rank; impIdx=i; } });
+  const stall = mturns.length-1 - impIdx;           // 모델 유효 턴 기준: 마지막 갱신 이후 경과
   const s=el('div','stat-upd');
   if(stall<=0){ s.classList.add('fresh'); s.textContent='▲ 방금 기록 갱신'; }
   else { s.classList.add('stall'); if(stall>=4) s.classList.add('long'); s.textContent='— '+stall+'턴째 제자리'; }
@@ -2248,9 +2255,14 @@ function histStrip(model,v){
   for(const t of [...v.turns].reverse()){
     if(shownValid>=8) break;
     if(t.valid){
-      const c=closeness(t.rank);
-      const chip=el('span','hchip');
-      const rgb=heatRGB(c); chip.style.background=`rgb(${rgb[0]},${rgb[1]},${rgb[2]})`; chip.style.color=inkOn(rgb);
+      const chip=el('span','hchip'+(t.auto?' auto':''));
+      if(t.auto){
+        // 무작위 오프닝: 모델 추측 아님 → 히트색 미적용(성과처럼 보이지 않게) + '배정' 표식 + 안내.
+        chip.title='시스템 무작위 착수(모델 추측 아님)';
+        chip.appendChild(el('span','ha','배정'));
+      }else{
+        const rgb=heatRGB(closeness(t.rank)); chip.style.background=`rgb(${rgb[0]},${rgb[1]},${rgb[2]})`; chip.style.color=inkOn(rgb);
+      }
       chip.appendChild(el('span','hw',t.guess));
       if(t.rank!=null) chip.appendChild(el('span','hr',t.rank+'위'));
       strip.appendChild(chip);
